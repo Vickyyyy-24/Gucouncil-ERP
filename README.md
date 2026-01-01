@@ -1,6 +1,6 @@
-# Dynamic CRM System
+# Dynamic ERP System
 
-A comprehensive full-stack CRM (Customer Relationship Management) system with role-based authentication, biometric attendance tracking, and committee management features.
+A comprehensive full-stack system with role-based authentication, biometric attendance tracking, and committee management features.
 
 ## Features
 
