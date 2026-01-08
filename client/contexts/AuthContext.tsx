@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'react-toastify'
+import { apiClient } from '@/lib/api'
 
 interface User {
   id: number
@@ -42,38 +43,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setToken(storedToken)
       setUser(JSON.parse(storedUser))
     }
+    // Ensure apiClient has the token if present
+    try {
+      const t = localStorage.getItem('token')
+      if (t) apiClient.setToken(t)
+    } catch {}
     setLoading(false)
   }, [])
 
   const login = async (councilId: string, password: string) => {
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
-
-      const response = await fetch(`${API_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ councilId, password }),
-      })
-
-      let data: any = null
-      try {
-        data = await response.json()
-      } catch (jsonErr) {
-        // If response isn't JSON or network failed after response
-        throw new Error('Invalid response from server')
-      }
-
-      if (!response.ok) {
-        throw new Error(data.message || 'Login failed')
-      }
+      const data = await apiClient.login(councilId, password)
 
       setToken(data.token)
       setUser(data.user)
-      
       localStorage.setItem('token', data.token)
       localStorage.setItem('user', JSON.stringify(data.user))
+
+      // Ensure central API client uses the token
+      try { apiClient.setToken(data.token) } catch {}
 
       // Redirect based on role
       switch (data.user.role) {
@@ -106,8 +94,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setUser(null)
     setToken(null)
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  try { apiClient.clearToken() } catch {}
     router.push('/login')
     toast.info('Logged out successfully')
   }

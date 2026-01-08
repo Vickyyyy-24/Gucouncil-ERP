@@ -1,235 +1,170 @@
-'use client'
+ 'use client'
 
-import React, { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { toast } from 'react-toastify'
+import { useEffect, useState } from 'react'
+import { getSocket } from '@/lib/socket'
+import { Download, LayoutDashboard, Activity } from 'lucide-react'
+import { apiClient, ApiError } from '@/lib/api'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/contexts/AuthContext'
 
-export default function GSInsights() {
-  const [insights, setInsights] = useState<any>(null)
-  const [allCommittees, setAllCommittees] = useState<any[]>([])
-  const [pendingForGS, setPendingForGS] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+import SummaryCard from '@/components/gs/SummaryCard'
+import FiltersBar from '@/components/gs/FiltersBar'
+import AttendanceChart from '@/components/gs/AttendanceChart'
+import CommitteeTable from '@/components/gs/CommitteeTable'
+import LiveActivityFeed from '@/components/gs/LiveActivityFeed'
+
+export default function GSInsight() {
+ const { token, logout } = useAuth()
+ const router = useRouter()
+
+  const [committee, setCommittee] = useState('all')
+  const [range, setRange] = useState({ start: '', end: '' })
+  const [refresh, setRefresh] = useState(0)
+  const [summary, setSummary] = useState<any>(null)
 
   useEffect(() => {
-    fetchGSInsights()
-    fetchPendingApprovals()
+    const socket = getSocket()
+    socket.on('attendance:update', () => setRefresh(v => v + 1))
+    socket.on('leave_update', () => setRefresh(v => v + 1))
+    socket.on('system:log', () => setRefresh(v => v + 1))
+
+    return () => {
+      socket.off('attendance:update')
+      socket.off('leave_update')
+      socket.off('system:log')
+    }
   }, [])
 
-  const fetchGSInsights = async () => {
-    try {
-      const token = localStorage.getItem('token')
-      const response = await fetch('http://localhost:5000/api/gs/all-committees-insights', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
+useEffect(() => {
+  if (!token) {
+    console.warn('⛔ GSInsight: token not ready, skipping API call')
+    return
+  }
 
-      if (response.ok) {
-        const data = await response.json()
-        setInsights(data)
-        
-        // Convert object to array for easier rendering
-        const committeeArray = Object.entries(data).map(([name, stats]: [string, any]) => ({
-          name,
-          ...stats
-        }))
-        setAllCommittees(committeeArray)
+  apiClient.setToken(token)
+
+  let mounted = true
+
+  const fetchSummary = async () => {
+    try {
+      const data = await apiClient.getGSDashboardSummary()
+      if (mounted) setSummary(data)
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        try { localStorage.removeItem('token') } catch {}
+        try { logout() } catch {}
+        router.replace('/login')
+        return
       }
-    } catch (error) {
-      toast.error('Failed to fetch GS insights')
-    } finally {
-      setLoading(false)
+
+      console.error('Failed to load GS summary:', err)
+      if (mounted) setSummary(null)
     }
   }
 
-  const fetchPendingApprovals = async () => {
-    // Mock pending approvals for GS
-    setPendingForGS([
-      {
-        id: 1,
-        committee: 'Technical',
-        councilId: 'TECH002',
-        name: 'Jane Smith',
-        title: 'Sick Leave',
-        leaveFrom: '2024-01-20',
-        leaveTo: '2024-01-21',
-        reason: 'Feeling unwell',
-        headApprovedAt: '2024-01-18 11:30:00',
-        appliedAt: '2024-01-18 10:00:00'
-      },
-      {
-        id: 2,
-        committee: 'Cultural',
-        councilId: 'CULT003',
-        name: 'Mike Wilson',
-        title: 'Personal Leave',
-        leaveFrom: '2024-01-25',
-        leaveTo: '2024-01-26',
-        reason: 'Family function',
-        headApprovedAt: '2024-01-19 09:15:00',
-        appliedAt: '2024-01-19 08:30:00'
-      }
-    ])
+  fetchSummary()
+
+  return () => {
+    mounted = false
   }
+}, [token, refresh, router, logout]) 
 
-  const approveLeave = async (leaveId: number) => {
+
+  const downloadAttendancePdf = async () => {
+    if (!range.start || !range.end) {
+      alert('Select date range first')
+      return
+    }
+
     try {
-      const token = localStorage.getItem('token')
-      const response = await fetch(`http://localhost:5000/api/gs/approve-leave/${leaveId}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        toast.success('Leave approved successfully!')
-        fetchPendingApprovals()
+      const res = await apiClient.postRaw(`/api/admin/attendance-report/pdf?committee=${encodeURIComponent(committee)}&startDate=${range.start}&endDate=${range.end}`, { method: 'GET' })
+      if (!res.ok) throw new ApiError(res.status, 'PDF download failed')
+      const blob = await res.blob()
+      if (blob instanceof Blob) {
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'attendance-report.pdf'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        window.URL.revokeObjectURL(url)
       } else {
-        toast.error(data.message || 'Failed to approve leave')
+        alert(typeof blob === 'string' ? blob : 'Unable to download PDF')
       }
-    } catch (error) {
-      toast.error('Server error')
+    } catch (err: any) {
+      alert(err?.message || 'PDF download failed')
     }
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-      </div>
-    )
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="space-y-6"
-    >
-      <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
-        <h2 className="text-2xl font-bold text-slate-900 mb-6">All Committees Insights</h2>
-        
-        {/* Committee Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-          {allCommittees.map((committee, index) => (
-            <div key={index} className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-lg p-6 border border-slate-200">
-              <h3 className="text-lg font-semibold text-slate-900 mb-4">{committee.name}</h3>
-              
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-600">Total Members:</span>
-                  <span className="font-semibold text-slate-900">{committee.totalMembers}</span>
-                </div>
-                
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-600">Pending Leaves:</span>
-                  <span className="font-semibold text-orange-600">{committee.pendingLeaves}</span>
-                </div>
-                
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-600">Pending Head Approval:</span>
-                  <span className="font-semibold text-yellow-600">{committee.pendingHeadApproval}</span>
-                </div>
-                
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-slate-600">Attendance Rate:</span>
-                  <span className="font-semibold text-green-600">{committee.attendanceRate}%</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Pending GS Approvals */}
-        <div className="mb-8">
-          <h3 className="text-xl font-semibold text-slate-800 mb-4">Pending GS Approvals</h3>
-          
-          {pendingForGS.length === 0 ? (
-            <div className="text-center py-8 bg-slate-50 rounded-lg">
-              <p className="text-slate-600">No pending approvals</p>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {pendingForGS.map((leave) => (
-                <div key={leave.id} className="border border-slate-200 rounded-lg p-4">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <h4 className="text-lg font-semibold text-slate-900">{leave.title}</h4>
-                      <p className="text-sm text-slate-600">
-                        {leave.name} ({leave.councilId}) - {leave.committee} Committee
-                      </p>
-                      <p className="text-sm text-slate-600">
-                        {new Date(leave.leaveFrom).toLocaleDateString()} - {new Date(leave.leaveTo).toLocaleDateString()}
-                      </p>
-                      <p className="text-sm text-slate-500">
-                        Head Approved: {new Date(leave.headApprovedAt).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">
-                      Approved by Head
-                    </span>
-                  </div>
-                  
-                  <p className="text-slate-700 mb-4">{leave.reason}</p>
-                  
-                  <div className="flex space-x-3">
-                    <button
-                      onClick={() => approveLeave(leave.id)}
-                      className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-                    >
-                      Approve
-                    </button>
-                    <button
-                      className="bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Overall Statistics */}
+    <div className="min-h-screen bg-[#020617] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#0f172a] via-[#020617] to-[#020617] p-6 text-blue-100 font-sans">
+      <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 border-b border-blue-900/50 pb-6">
         <div>
-          <h3 className="text-xl font-semibold text-slate-800 mb-4">Overall Statistics</h3>
-          
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-slate-50 rounded-lg p-4 text-center">
-              <p className="text-2xl font-bold text-slate-900">
-                {allCommittees.reduce((sum, c) => sum + c.totalMembers, 0)}
-              </p>
-              <p className="text-sm text-slate-600">Total Members</p>
+          <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300 flex items-center gap-3">
+            <LayoutDashboard className="text-blue-500" /> GS INSIGHTS
+          </h1>
+          <p className="text-blue-400/60 text-sm mt-1 uppercase tracking-widest font-medium">System Intelligence Monitor</p>
+        </div>
+
+        <div className="flex items-center gap-4 mt-4 md:mt-0">
+          <FiltersBar
+            committee={committee}
+            setCommittee={setCommittee}
+            range={range}
+            setRange={setRange}
+          />
+          <button
+            onClick={downloadAttendancePdf}
+            className="group flex items-center gap-2 bg-blue-600/10 hover:bg-blue-600 border border-blue-500/50 text-blue-400 hover:text-white px-4 py-2 rounded-md transition-all duration-300 shadow-[0_0_15px_rgba(37,99,235,0.2)]"
+          >
+            <Download size={18} className="group-hover:animate-bounce" />
+            <span className="text-sm font-semibold uppercase">Export PDF</span>
+          </button>
+        </div>
+      </header>
+
+      <div className="space-y-6">
+        {summary && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            <SummaryCard title="Committees" value={summary.totalCommittees} variant="blue" />
+            <SummaryCard title="Total Members" value={summary.totalMembers} variant="cyan" />
+            <SummaryCard title="Daily Attendance" value={summary.todayAttendance} variant="magenta" />
+            <SummaryCard title="Pending Leaves" value={summary.pendingLeaves} variant="warning" />
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-[#0f172a]/40 border border-blue-500/20 backdrop-blur-md rounded-xl p-6 shadow-inner relative overflow-hidden group">
+               <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 group-hover:bg-cyan-400 transition-colors"></div>
+               <h3 className="text-sm font-bold text-blue-300 mb-4 uppercase flex items-center gap-2">
+                 <Activity size={16} /> Attendance Analytics
+               </h3>
+               <AttendanceChart committee={committee} range={range} refresh={refresh} />
             </div>
-            
-            <div className="bg-slate-50 rounded-lg p-4 text-center">
-              <p className="text-2xl font-bold text-slate-900">
-                {allCommittees.reduce((sum, c) => sum + c.pendingLeaves, 0)}
-              </p>
-              <p className="text-sm text-slate-600">Total Pending Leaves</p>
-            </div>
-            
-            <div className="bg-slate-50 rounded-lg p-4 text-center">
-              <p className="text-2xl font-bold text-slate-900">
-                {allCommittees.reduce((sum, c) => sum + c.pendingHeadApproval, 0)}
-              </p>
-              <p className="text-sm text-slate-600">Pending Head Approval</p>
-            </div>
-            
-            <div className="bg-slate-50 rounded-lg p-4 text-center">
-              <p className="text-2xl font-bold text-slate-900">
-                {Math.round(allCommittees.reduce((sum, c) => sum + c.attendanceRate, 0) / allCommittees.length)}%
-              </p>
-              <p className="text-sm text-slate-600">Average Attendance</p>
+
+            {committee !== 'all' && (
+              <div className="bg-[#0f172a]/40 border border-blue-500/20 backdrop-blur-md rounded-xl p-6 shadow-xl">
+                <CommitteeTable committee={committee} range={range} refresh={refresh} />
+              </div>
+            )}
+          </div>
+
+          <div className="lg:col-span-1">
+            <div className="bg-[#0f172a]/60 border border-blue-500/30 backdrop-blur-lg rounded-xl p-4 h-full shadow-2xl relative">
+              <div className="absolute top-0 right-0 p-2">
+                <span className="flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                </span>
+              </div>
+              <h3 className="text-sm font-bold text-blue-300 mb-4 uppercase tracking-tighter">Live Operations Feed</h3>
+              <LiveActivityFeed refresh={refresh} />
             </div>
           </div>
         </div>
       </div>
-    </motion.div>
+    </div>
   )
 }

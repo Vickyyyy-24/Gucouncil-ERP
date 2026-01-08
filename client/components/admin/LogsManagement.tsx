@@ -1,148 +1,308 @@
 'use client'
 
-import React, { useState } from 'react'
-import { motion } from 'framer-motion'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { io, Socket } from 'socket.io-client'
+import { toast } from 'react-toastify'
+import { 
+  Activity, 
+  Download, 
+  Calendar, 
+  ShieldCheck, 
+  Clock, 
+  FileText, 
+  Filter, 
+  Server,
+  User,
+  Info,
+  Terminal
+} from 'lucide-react'
+
+const API = 'http://localhost:5005'
+
+type LogRow = {
+  id: number
+  user: string | null
+  action: string
+  description: string
+  created_at: string
+}
 
 export default function LogsManagement() {
-  const [activeLogTab, setActiveLogTab] = useState('attendance')
+  const [activeTab, setActiveTab] = useState('attendance')
+  const [logs, setLogs] = useState<LogRow[]>([])
+  const [loading, setLoading] = useState(false)
 
-  const logTypes = [
-    { id: 'attendance', label: 'Attendance Logs', icon: '⏰' },
-    { id: 'reports', label: 'Report Logs', icon: '📄' },
-    { id: 'leaves', label: 'Leave Application Logs', icon: '📅' },
-    { id: 'login', label: 'Login Logs', icon: '🔐' }
+  /* ================= FILTERS ================= */
+  const [userFilter, setUserFilter] = useState('')
+  const [actionFilter, setActionFilter] = useState('')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+
+  const logTabs = [
+    { id: 'attendance', label: 'Attendance', icon: <Clock size={16} /> },
+    { id: 'reports', label: 'Reports', icon: <FileText size={16} /> },
+    { id: 'leaves', label: 'Leaves', icon: <Calendar size={16} /> },
+    { id: 'login', label: 'Auth', icon: <ShieldCheck size={16} /> },
+    { id: 'system', label: 'System', icon: <Server size={16} /> }
   ]
 
-  const mockLogs = {
-    attendance: [
-      { id: 1, user: 'TECH001', action: 'Punch In', timestamp: '2024-01-15 09:00:00', details: 'Biometric scan successful' },
-      { id: 2, user: 'TECH001', action: 'Punch Out', timestamp: '2024-01-15 17:30:00', details: 'Total hours: 8.5' },
-      { id: 3, user: 'CULT001', action: 'Punch In', timestamp: '2024-01-15 09:15:00', details: 'Biometric scan successful' }
-    ],
-    reports: [
-      { id: 1, user: 'TECH001', action: 'Report Submitted', timestamp: '2024-01-15 16:00:00', details: 'Weekly progress report' },
-      { id: 2, user: 'CULT001', action: 'Report Approved', timestamp: '2024-01-15 14:30:00', details: 'Approved by committee head' }
-    ],
-    leaves: [
-      { id: 1, user: 'TECH002', action: 'Leave Applied', timestamp: '2024-01-14 10:00:00', details: 'Sick leave for 2 days' },
-      { id: 2, user: 'TECH002', action: 'Leave Approved by Head', timestamp: '2024-01-14 11:30:00', details: 'Waiting for GS approval' }
-    ],
-    login: [
-      { id: 1, user: 'ADMIN', action: 'Login', timestamp: '2024-01-15 08:00:00', details: 'Successful login from 192.168.1.1' },
-      { id: 2, user: 'TECH001', action: 'Login', timestamp: '2024-01-15 08:45:00', details: 'Successful login from 192.168.1.2' }
-    ]
+  const fetchLogs = useCallback(async () => {
+    if (!token) return
+    try {
+      setLoading(true)
+      const params = new URLSearchParams({
+        type: activeTab,
+        user: userFilter,
+        action: actionFilter,
+        startDate,
+        endDate
+      })
+
+      const { apiClient, ApiError } = await import('@/lib/api')
+      try {
+        const data = await apiClient.get(`/api/admin/logs?${params.toString()}`)
+        setLogs(Array.isArray(data) ? data : [])
+      } catch (err: any) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          try { localStorage.removeItem('token') } catch {}
+          toast.error('Unauthorized — please login')
+          return
+        }
+        throw err
+      }
+    } catch {
+      toast.error('Failed to load logs')
+    } finally {
+      setLoading(false)
+    }
+  }, [activeTab, userFilter, actionFilter, startDate, endDate, token])
+
+  useEffect(() => {
+    fetchLogs()
+  }, [fetchLogs])
+
+  useEffect(() => {
+    const socket: Socket = io(API)
+    socket.on('log:update', (log: LogRow) => {
+      if (log.action.toLowerCase().includes(activeTab)) {
+        setLogs(prev => [log, ...prev])
+      }
+    })
+    return () => { socket.disconnect() }
+  }, [activeTab])
+
+  const downloadPdf = async () => {
+    if (!token) return
+    const params = new URLSearchParams({ type: activeTab, user: userFilter, action: actionFilter, startDate, endDate })
+    try {
+      const { apiClient, ApiError } = await import('@/lib/api')
+      try {
+        const resp = await apiClient.postRaw(`/api/admin/logs/pdf?${params.toString()}`)
+        if (!resp.ok) throw new Error('Export failed')
+        const blob = await resp.blob()
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${activeTab}-audit-log.pdf`
+        a.click()
+        window.URL.revokeObjectURL(url)
+      } catch (err: any) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          try { localStorage.removeItem('token') } catch {}
+          toast.error('Unauthorized — please login')
+          return
+        }
+        throw err
+      }
+    } catch {
+      toast.error('PDF export failed')
+    }
   }
 
-  const downloadPDF = (logType: string) => {
-    // Simulate PDF download
-    alert(`Downloading ${logType} logs PDF report...`)
-  }
+  const summaryStats = useMemo(() => ({
+    total: logs.length,
+    today: logs.filter(l => new Date(l.created_at).toDateString() === new Date().toDateString()).length,
+    week: logs.filter(l => Date.now() - new Date(l.created_at).getTime() < 7 * 86400000).length
+  }), [logs])
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="space-y-6"
-    >
-      <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
-        <h2 className="text-2xl font-bold text-slate-900 mb-6">Logs & Reports</h2>
-        
-        {/* Log Type Tabs */}
-        <div className="mb-6 border-b border-slate-200">
-          <nav className="-mb-px flex space-x-8">
-            {logTypes.map((type) => (
-              <button
-                key={type.id}
-                onClick={() => setActiveLogTab(type.id)}
-                className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors duration-200 ${
-                  activeLogTab === type.id
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
-                }`}
-              >
-                <span className="mr-2">{type.icon}</span>
-                {type.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-
-        {/* Download Button */}
-        <div className="mb-6 flex justify-end">
+    <div className="min-h-screen bg-[#F9FAFB] p-3 sm:p-6 md:p-8 font-sans text-slate-900">
+      <motion.div 
+        initial={{ opacity: 0, y: 10 }} 
+        animate={{ opacity: 1, y: 0 }} 
+        className="max-w-7xl mx-auto space-y-6"
+      >
+        {/* HEADER */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="text-center lg:text-left">
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight flex items-center justify-center lg:justify-start gap-3">
+              <Activity className="text-indigo-600 shrink-0" />
+              Audit System Log
+            </h1>
+            <p className="text-slate-500 text-sm md:text-base mt-1">Real-time system monitoring and event logs.</p>
+          </div>
+          
           <button
-            onClick={() => downloadPDF(activeLogTab)}
-            className="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+            onClick={downloadPdf}
+            className="flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-4 py-2.5 rounded-lg font-semibold hover:bg-slate-50 transition-all shadow-sm active:scale-95 w-full lg:w-auto"
           >
-            <svg className="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Download PDF
+            <Download size={18} />
+            <span className="text-sm">Export Audit Log</span>
           </button>
         </div>
 
-        {/* Logs Table */}
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  User
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Action
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Timestamp
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Details
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-slate-200">
-              {mockLogs[activeLogTab as keyof typeof mockLogs].map((log) => (
-                <tr key={log.id}>
-                  <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-slate-900">
-                    {log.user}
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-600">
-                    {log.action}
-                  </td>
-                  <td className="px-4 py-4 whitespace-nowrap text-sm text-slate-600">
-                    {log.timestamp}
-                  </td>
-                  <td className="px-4 py-4 text-sm text-slate-600">
-                    {log.details}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {/* SUMMARY TILES */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[
+            { label: 'Total Events', val: summaryStats.total, color: 'text-indigo-600' },
+            { label: 'Logged Today', val: summaryStats.today, color: 'text-emerald-600' },
+            { label: 'Recent (7d)', val: summaryStats.week, color: 'text-blue-600' }
+          ].map((stat, i) => (
+            <div key={i} className="bg-white p-4 md:p-5 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-center">
+              <p className="text-[10px] md:text-xs font-bold text-slate-400 uppercase tracking-widest">{stat.label}</p>
+              <p className={`text-2xl md:text-3xl font-black ${stat.color} mt-1`}>{stat.val}</p>
+            </div>
+          ))}
         </div>
 
-        {/* Summary Stats */}
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-slate-50 rounded-lg p-4 text-center">
-            <p className="text-2xl font-bold text-slate-900">
-              {mockLogs[activeLogTab as keyof typeof mockLogs].length}
-            </p>
-            <p className="text-sm text-slate-600">Total Entries</p>
+        {/* MAIN LOG PANEL */}
+        <div className="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+          
+          {/* TABS - Scrollable on mobile */}
+          <div className="flex overflow-x-auto bg-slate-50/50 border-b border-slate-200 no-scrollbar scroll-smooth">
+            <div className="flex min-w-max">
+              {logTabs.map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-5 md:px-6 py-4 text-xs md:text-sm font-bold transition-all whitespace-nowrap border-b-2 ${
+                    activeTab === tab.id 
+                    ? 'border-indigo-600 text-indigo-600 bg-white' 
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {tab.icon}
+                  {tab.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="bg-slate-50 rounded-lg p-4 text-center">
-            <p className="text-2xl font-bold text-slate-900">24</p>
-            <p className="text-sm text-slate-600">Today</p>
-          </div>
-          <div className="bg-slate-50 rounded-lg p-4 text-center">
-            <p className="text-2xl font-bold text-slate-900">168</p>
-            <p className="text-sm text-slate-600">This Week</p>
-          </div>
-          <div className="bg-slate-50 rounded-lg p-4 text-center">
-            <p className="text-2xl font-bold text-slate-900">672</p>
-            <p className="text-sm text-slate-600">This Month</p>
+
+          <div className="p-4 md:p-6 space-y-6">
+            {/* SEARCH & FILTERS - Multi-breakpoint Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 md:gap-4">
+              <div className="relative">
+                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input
+                  placeholder="Council ID..."
+                  value={userFilter}
+                  onChange={e => setUserFilter(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                />
+              </div>
+              <div className="relative">
+                <Terminal className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input
+                  placeholder="Action..."
+                  value={actionFilter}
+                  onChange={e => setActionFilter(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                />
+              </div>
+              <div className="relative">
+                 <input
+                  type="date"
+                  title="Start Date"
+                  aria-label="Start Date"
+                  placeholder="Start Date"
+                  onChange={e => setStartDate(e.target.value)}
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                />
+              </div>
+              <div className="relative">
+                <input
+                  type="date"
+                  title="End Date"
+                  aria-label="End Date"
+                  placeholder="End Date"
+                  onChange={e => setEndDate(e.target.value)}
+                  className="w-full px-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                />
+              </div>
+              <button
+                onClick={fetchLogs}
+                className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 sm:col-span-2 lg:col-span-1 shadow-md shadow-indigo-100"
+              >
+                <Filter size={16} /> Apply Filters
+              </button>
+            </div>
+
+            {/* TABLE CONTAINER - Horizontal Scroll Protection */}
+            <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+              <div className="overflow-x-auto scrollbar-thin scrollbar-thumb-slate-200">
+                <table className="w-full text-left border-collapse min-w-[700px]">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-4 py-3.5 text-[10px] md:text-xs font-black uppercase text-slate-500 tracking-wider">User</th>
+                      <th className="px-4 py-3.5 text-[10px] md:text-xs font-black uppercase text-slate-500 tracking-wider">Action</th>
+                      <th className="px-4 py-3.5 text-[10px] md:text-xs font-black uppercase text-slate-500 tracking-wider">Timestamp</th>
+                      <th className="px-4 py-3.5 text-[10px] md:text-xs font-black uppercase text-slate-500 tracking-wider">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    <AnimatePresence mode='popLayout'>
+                      {loading ? (
+                        <tr><td colSpan={4} className="p-12 text-center text-slate-400 animate-pulse">Synchronizing logs...</td></tr>
+                      ) : logs.length === 0 ? (
+                        <tr><td colSpan={4} className="p-12 text-center text-slate-400">No events found in this category.</td></tr>
+                      ) : (
+                        logs.map((log) => (
+                          <motion.tr 
+                            layout
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            key={log.id} 
+                            className="hover:bg-indigo-50/40 transition-colors group"
+                          >
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 rounded-full bg-indigo-50 flex items-center justify-center text-[10px] font-bold text-indigo-600 shrink-0">
+                                  {log.user ? log.user.substring(0,2).toUpperCase() : 'S'}
+                                </div>
+                                <span className="text-sm font-semibold text-slate-700">{log.user || 'SYSTEM'}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <span className="px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-700 text-[10px] font-bold border border-indigo-100 uppercase tracking-tighter">
+                                {log.action}
+                              </span>
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap">
+                              <div className="flex flex-col leading-tight">
+                                <span className="text-xs md:text-sm font-medium text-slate-600">{new Date(log.created_at).toLocaleDateString()}</span>
+                                <span className="text-[10px] text-slate-400 font-mono">{new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4">
+                              <div className="flex items-center justify-between gap-4 max-w-xs md:max-w-md">
+                                <span className="text-xs md:text-sm text-slate-500 truncate">{log.description}</span>
+                                <Info size={14} className="text-slate-300 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity cursor-help shrink-0" />
+                              </div>
+                            </td>
+                          </motion.tr>
+                        ))
+                      )}
+                    </AnimatePresence>
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </motion.div>
+      </motion.div>
+    </div>
   )
 }

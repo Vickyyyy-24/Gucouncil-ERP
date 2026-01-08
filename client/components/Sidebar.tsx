@@ -4,8 +4,6 @@ import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   LogOut, 
-  Menu, 
-  X, 
   ChevronRight, 
   ShieldCheck
 } from 'lucide-react'
@@ -22,26 +20,24 @@ interface SidebarProps {
   activeTab: string
   onTabChange: (tabId: string) => void
   userRole: string
-  onLogout?: () => void  // Optional logout callback
+  onLogout?: () => void
+  isOpen?: boolean  // Controlled by parent
+  onClose?: () => void  // Callback to close
 }
 
-export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogout }: SidebarProps) {
-  const [isOpen, setIsOpen] = useState(false)
+export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogout, isOpen = false, onClose }: SidebarProps) {
   const [isExpanded, setIsExpanded] = useState(false)
 
-  // Logout handler
   const handleLogout = () => {
     if (onLogout) {
-      onLogout()  // Call the passed logout function
+      onLogout()
     } else {
-      // Fallback: clear localStorage and redirect
       localStorage.removeItem('token')
       localStorage.removeItem('user')
       window.location.href = '/login'
     }
   }
 
-  // Dynamic Icon Renderer
   const IconRenderer = ({ iconName, className }: { iconName: string, className?: string }) => {
     const Icon = (LucideIcons as any)[iconName] || LucideIcons.HelpCircle
     return <Icon className={className} size={20} />
@@ -55,9 +51,9 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
           className="flex items-center gap-3 group cursor-pointer"
           whileHover={{ x: 2 }}
         >
-          <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/30 shrink-0">
+          {/* <div className="w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl flex items-center justify-center shadow-lg shadow-orange-500/30 shrink-0">
             <ShieldCheck className="text-white w-5 h-5 sm:w-6 sm:h-6" />
-          </div>
+          </div> */}
           {(isMobile || isExpanded) && (
             <motion.div
               initial={{ opacity: 0, width: 0 }}
@@ -65,10 +61,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
               exit={{ opacity: 0, width: 0 }}
               className="overflow-hidden"
             >
-              <h2 className="font-black text-white tracking-tight text-base sm:text-lg leading-tight">
-                COUNCIL <span className="text-orange-500">CRM</span>
-              </h2>
-              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none mt-1">
+              <p className="text-[30px] font-bold text-gray-400 uppercase leading-none mt-1">
                 {userRole.replace('_', ' ')} Panel
               </p>
             </motion.div>
@@ -88,7 +81,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
               transition={{ delay: index * 0.05 }}
               onClick={() => {
                 onTabChange(tab.id)
-                setIsOpen(false)
+                onClose?.()  // Close sidebar when tab changes
               }}
               className={`w-full group relative flex items-center gap-3 px-4 py-3.5 rounded-xl transition-all duration-300 ${
                 isActive
@@ -96,7 +89,6 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
                   : 'text-gray-400 hover:bg-[#252525] hover:text-white'
               }`}
             >
-              {/* Active Indicator */}
               {isActive && (
                 <motion.div 
                   layoutId="active-indicator"
@@ -154,41 +146,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
 
   return (
     <>
-      {/* MOBILE TRIGGER BUTTON */}
-      <motion.button
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
-        whileHover={{ scale: 1.1 }}
-        whileTap={{ scale: 0.9 }}
-        onClick={() => setIsOpen(!isOpen)}
-        className="lg:hidden fixed top-4 left-4 z-[60] p-3 bg-gradient-to-br from-orange-500 to-orange-600 rounded-xl shadow-lg shadow-orange-500/30 text-white"
-      >
-        <AnimatePresence mode="wait">
-          {isOpen ? (
-            <motion.div
-              key="close"
-              initial={{ rotate: -90, opacity: 0 }}
-              animate={{ rotate: 0, opacity: 1 }}
-              exit={{ rotate: 90, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              <X size={24} />
-            </motion.div>
-          ) : (
-            <motion.div
-              key="menu"
-              initial={{ rotate: 90, opacity: 0 }}
-              animate={{ rotate: 0, opacity: 1 }}
-              exit={{ rotate: -90, opacity: 0 }}
-              transition={{ duration: 0.2 }}
-            >
-              <Menu size={24} />
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </motion.button>
-
-      {/* MOBILE OVERLAY / DRAWER */}
+      {/* MOBILE OVERLAY / DRAWER - CONTROLLED BY PARENT */}
       <AnimatePresence>
         {isOpen && (
           <>
@@ -197,8 +155,8 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsOpen(false)}
-              className="lg:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-[70]"
+              onClick={onClose}
+              className="lg:hidden fixed inset-0 bg-black/70 backdrop-blur-md z-[90]"
             />
             {/* Drawer */}
             <motion.div
@@ -206,7 +164,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
               animate={{ x: 0 }}
               exit={{ x: '-100%' }}
               transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-              className="lg:hidden fixed left-0 top-0 bottom-0 w-[280px] z-[80] shadow-2xl"
+              className="lg:hidden fixed left-0 top-0 bottom-0 w-[280px] z-[95] shadow-2xl"
             >
               <NavContent isMobile={true} />
             </motion.div>

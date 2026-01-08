@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
 import { io } from 'socket.io-client'
+import { apiClient } from '@/lib/api'
 import html2canvas from 'html2canvas'
 import {
   Chart as ChartJS,
@@ -63,13 +64,7 @@ export default function CommitteeInsights() {
 
   const fetchInsights = async () => {
     try {
-      const token = localStorage.getItem('token')
-      if (!token) return
-      const res = await fetch(`${API}/api/head/committee-insights?range=${range}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error()
-      const data = await res.json()
+      const data = await apiClient.get(`/api/head/committee-insights?range=${range}`)
       setInsights({
         totalMembers: data?.totalMembers ?? 0,
         attendanceRate: data?.attendanceRate ?? 0,
@@ -77,39 +72,34 @@ export default function CommitteeInsights() {
         pendingLeaves: Array.isArray(data?.pendingLeaves) ? data.pendingLeaves : [],
         attendanceTrend: Array.isArray(data?.attendanceTrend) ? data.attendanceTrend : [],
       })
-    } catch {
+    } catch (err) {
+      console.error('Failed to fetch insights', err)
       toast.error('Failed to fetch insights')
     }
   }
 
   const fetchMembers = async () => {
     try {
-      const token = localStorage.getItem('token')
-      if (!token) return
-      const res = await fetch(`${API}/api/head/committee-members`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error()
-      setMembers(await res.json())
-    } catch {
+      const data = await apiClient.get('/api/head/committee-members')
+      setMembers(Array.isArray(data) ? data : [])
+    } catch (err) {
+      console.error('Failed to fetch members', err)
       toast.error('Failed to fetch members')
     }
   }
 
   const exportPdf = async () => {
     try {
-      const token = localStorage.getItem('token')
-      if (!token) return toast.error('Authentication required')
       const chartEl = document.getElementById('attendance-chart')
       if (!chartEl) return toast.error('Chart element not found')
       const canvas = await html2canvas(chartEl)
       const chartImage = canvas.toDataURL('image/png')
-      const res = await fetch(`${API}/api/head/committee-export/pdf`, {
+      const res = await apiClient.postRaw('/api/head/committee-export/pdf', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ chartImage }),
+        headers: { 'Content-Type': 'application/json' }
       })
-      if (!res.ok) throw new Error()
+      if (!res.ok) throw new Error('Export failed')
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')

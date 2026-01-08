@@ -1,29 +1,40 @@
 const { Server } = require('socket.io')
+const jwt = require('jsonwebtoken')
 
 let io
 
 function initSocket(server) {
+  const FRONTEND_URL = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
+
   io = new Server(server, {
     cors: {
-      origin: 'http://localhost:3000',
+      origin: FRONTEND_URL,
       methods: ['GET', 'POST'],
       credentials: true,
     },
   })
 
-  io.on('connection', (socket) => {
-    console.log('🔌 Socket connected:', socket.id)
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token
+    if (!token) return next(new Error('Authentication error'))
+    try {
+      const user = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key')
+      socket.user = user
+      next()
+    } catch (err) {
+      next(new Error('Authentication error'))
+    }
+  })
 
-    /**
-     * Join room by committee or role
-     * frontend emits after login
-     */
+  io.on('connection', (socket) => {
+    console.log('🔌 Socket connected:', socket.id, 'user:', socket.user?.councilId)
+
     socket.on('join', ({ role, committee }) => {
       if (role) socket.join(`role:${role}`)
       if (committee) socket.join(`committee:${committee}`)
 
       console.log(
-        `👥 Joined rooms → role:${role} committee:${committee}`
+        `👥 Joined rooms → role:${role || '-'} committee:${committee || '-'}`
       )
     })
 
@@ -37,40 +48,48 @@ function initSocket(server) {
 
 /* ================= EMITTERS ================= */
 
+/**
+ * Attendance updates
+ * → visible to GS + Admin + Committee Head
+ */
 function emitAttendanceUpdate(data) {
-  if (!io) {
-    console.warn('⚠️ Socket not initialized')
-    return
-  }
+  if (!io) return
 
-  // send to all OR specific committee
   io.emit('attendance:update', data)
 }
 
+/**
+ * Leave updates
+ * → committee specific
+ */
 function emitLeaveUpdate(payload) {
-  if (!io) {
-    console.warn('⚠️ Socket not initialized')
-    return
-  }
+  if (!io) return
 
-  /**
-   * payload should contain committee_name
-   * Example:
-   * { type, leaveId, committee, userId }
-   */
+  const event = 'leave:update'
 
   if (payload.committee) {
-    io.to(`committee:${payload.committee}`).emit(
-      'leave_update',
-      payload
-    )
+    io.to(`committee:${payload.committee}`).emit(event, payload)
   } else {
-    io.emit('leave_update', payload)
+    io.emit(event, payload)
   }
 }
+
+/**
+ * System logs (optional)
+ */
+function emitSystemLog(payload) {
+  if (!io) return
+  io.emit('system:log', payload)
+}
+emitSystemLog({
+  action: 'LOGIN',
+  description: 'User logged in',
+  created_at: new Date()
+})
 
 module.exports = {
   initSocket,
   emitAttendanceUpdate,
   emitLeaveUpdate,
+  emitSystemLog,
 }

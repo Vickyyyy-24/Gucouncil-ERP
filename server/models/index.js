@@ -20,7 +20,12 @@ const initDB = async () => {
       const schema = fs.readFileSync(schemaPath, 'utf8');
       
       // Execute the schema
-      await db.query(schema);
+      try {
+        await db.query(schema);
+      } catch (schemaErr) {
+        console.error('Failed executing schema.sql. Dumping schema for debugging:\n', schema.substring(0, 2000));
+        throw schemaErr;
+      }
       console.log('Database schema initialized successfully');
       return;
     } catch (error) {
@@ -150,31 +155,32 @@ class UserProfile {
     return result.rows[0];
   }
 
-  static async updateByCouncilId(council_id, updateData) {
-    const fields = Object.keys(updateData);
-    const values = Object.values(updateData);
+ static async updateByCouncilId(council_id, updateData) {
+  const fields = Object.keys(updateData)
 
-    const setClause = fields
-      .map((f, i) => `${f} = $${i + 2}`)
-      .join(', ');
-
-    const result = await db.query(
-      `
-      UPDATE user_profiles
-      SET ${setClause}, updated_at = NOW()
-      WHERE council_id = $1
-      RETURNING *
-      `,
-      [council_id, ...values]
-    );
-
-    return result.rows[0];
+  if (fields.length === 0) {
+    return this.findByCouncilId(council_id)
   }
+
+  const values = Object.values(updateData)
+
+  const setClause = fields
+    .map((f, i) => `${f} = $${i + 2}`)
+    .join(', ')
+
+  const result = await db.query(
+    `
+    UPDATE user_profiles
+    SET ${setClause}, updated_at = NOW()
+    WHERE council_id = $1
+    RETURNING *
+    `,
+    [council_id, ...values]
+  )
+
+  return result.rows[0]
 }
-
-
-
-
+}
 // Attendance Model
 class Attendance {
   static async punchIn(user_id) {
@@ -470,17 +476,21 @@ class BiometricRegistration {
     return result.rows[0];
   }
 
-  static async findAll() {
-    const query = `
-      SELECT br.*, up.name, up.council_id
-      FROM biometric_registrations br
-      JOIN user_profiles up ON br.user_id = up.user_id
-      ORDER BY br.registered_at DESC
-    `;
-    
-    const result = await db.query(query);
-    return result.rows;
-  }
+static async findAll() {
+  const result = await db.query(`
+    SELECT
+      br.*,
+      up.name,
+      u.council_id
+    FROM biometric_registrations br
+    JOIN users u ON u.id = br.user_id
+    JOIN user_profiles up ON up.council_id = u.council_id
+    ORDER BY br.registered_at DESC
+  `)
+
+  return result.rows
+}
+
 
   static async delete(id) {
     const query = 'DELETE FROM biometric_registrations WHERE id = $1';

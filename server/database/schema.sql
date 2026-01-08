@@ -73,3 +73,14 @@ CREATE TABLE IF NOT EXISTS work_reports (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS system_logs (
+  id SERIAL PRIMARY KEY,
+  actor_user_id INTEGER REFERENCES users(id),
+  actor_role VARCHAR(50),
+  action VARCHAR(100),        -- CREATE / UPDATE / DELETE / APPROVE
+  entity_type VARCHAR(50),    -- USER / PROFILE / ATTENDANCE / REPORT / LEAVE
+  entity_id INTEGER,
+  description TEXT,
+  severity VARCHAR(20) DEFAULT 'INFO',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

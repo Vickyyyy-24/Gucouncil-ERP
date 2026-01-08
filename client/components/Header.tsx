@@ -19,10 +19,15 @@ interface UserType {
   id: number
   councilId: string
   role: string
+  memberPicture?: string
+  name?: string
 }
 
 interface HeaderProps {
   user: UserType | null
+  onMenuClick?: () => void
+  onProfileClick?: () => void
+  onLogout?: () => void
 }
 
 // Real NotificationBell component with Socket.io
@@ -131,34 +136,113 @@ function NotificationBell() {
   )
 }
 
-export default function Header({ user }: HeaderProps) {
+// User Avatar Component with Profile Picture
+function UserAvatar({ user }: { user: UserType | null }) {
+  const [showImage, setShowImage] = useState(true)
+
+  // Get image URL
+  const getImageUrl = () => {
+    if (!user?.memberPicture) return null
+    
+    if (user.memberPicture.startsWith('http')) {
+      return user.memberPicture
+    }
+    
+    // Construct full URL for backend images
+    return `http://localhost:5005${user.memberPicture}`
+  }
+
+  const imageUrl = getImageUrl()
+
+  return (
+    <div className="relative flex h-9 w-9 sm:h-11 sm:w-11 items-center justify-center rounded-xl sm:rounded-2xl border-2 border-orange-500/20 bg-[#252525] shadow-lg transition-all group-hover:border-orange-500/50 group-hover:shadow-orange-500/20 overflow-hidden">
+      
+      {/* Profile Picture */}
+      {imageUrl && showImage && (
+        <img
+          src={imageUrl}
+          alt={user?.name || user?.councilId || 'User'}
+          className="absolute inset-0 w-full h-full object-cover"
+          onError={() => {
+            console.warn('❌ Profile image failed to load:', imageUrl)
+            setShowImage(false)
+          }}
+          onLoad={() => {
+            console.log('✅ Profile image loaded successfully')
+          }}
+        />
+      )}
+
+      {/* Fallback Avatar (always visible as background) */}
+      <div className={`absolute inset-0 flex items-center justify-center bg-gradient-to-br from-orange-500 to-orange-600 text-xs sm:text-sm font-black text-white ${
+        showImage && imageUrl ? 'hidden' : 'flex'
+      }`}>
+        {user?.councilId
+          ? user.councilId.charAt(0).toUpperCase()
+          : <User className="w-4 h-4 sm:w-5 sm:h-5" />
+        }
+      </div>
+    </div>
+  )
+}
+
+export default function Header({ user, onMenuClick, onProfileClick, onLogout }: HeaderProps) {
   const [isSearchFocused, setIsSearchFocused] = useState(false)
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
 
+  const handleLogout = () => {
+    setShowUserMenu(false)
+    
+    if (onLogout) {
+      onLogout()
+    } else {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      window.location.href = '/login'
+    }
+  }
+
+  const handleProfileClick = () => {
+    setShowUserMenu(false)
+    if (onProfileClick) {
+      onProfileClick()
+    }
+  }
+
   return (
     <header className="sticky top-0 z-50 w-full border-b border-orange-500/10 bg-[#1A1A1A]/95 backdrop-blur-xl">
-      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 sm:h-20 items-center justify-between gap-3 sm:gap-4">
+      <div className="w-full px-3 sm:px-4 lg:px-6">
+        <div className="flex h-16 sm:h-20 items-center justify-between gap-2 sm:gap-4">
           
-          {/* LEFT: BRANDING & SYSTEM STATUS */}
+          {/* LEFT: HAMBURGER MENU (Mobile) OR BRANDING (Desktop) */}
           <motion.div 
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5 }}
             className={`flex items-center gap-2 sm:gap-3 min-w-fit ${mobileSearchOpen ? 'hidden sm:flex' : 'flex'}`}
           >
+            <motion.button
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={onMenuClick}
+              className="lg:hidden flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-lg shadow-orange-500/30 text-white"
+            >
+              <Menu className="w-5 h-5" strokeWidth={2.5} />
+            </motion.button>
+
             <motion.div 
               whileHover={{ scale: 1.05, rotate: 5 }}
               whileTap={{ scale: 0.95 }}
-              className="flex h-10 w-10 sm:h-12 sm:w-12 items-center justify-center rounded-xl sm:rounded-2xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-lg shadow-orange-500/30 shrink-0"
+              className="hidden lg:flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-lg shadow-orange-500/30 shrink-0"
             >
-              <ShieldCheck className="text-white w-5 h-5 sm:w-6 sm:h-6" />
+              <ShieldCheck className="text-white w-6 h-6" />
             </motion.div>
+
             <div className="hidden sm:flex flex-col">
-              <h1 className="text-xs sm:text-sm font-black uppercase tracking-[0.2em] text-white leading-none">
-                Council <span className="text-orange-500">CRM</span>
-              </h1>
+              <h2 className="font-black text-white tracking-tight text-base sm:text-lg leading-tight">
+                COUNCIL <span className="text-orange-500">ERP</span>
+              </h2>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="relative flex h-1.5 w-1.5">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-75"></span>
@@ -190,12 +274,10 @@ export default function Header({ user }: HeaderProps) {
                     : 'border-orange-500/20 hover:border-orange-500/40'
                 }`}
               />
-              {/* Hotkey hint - desktop only */}
               <div className="absolute right-3 hidden sm:flex items-center gap-1 rounded-lg border border-orange-500/20 bg-[#2A2A2A] px-2 py-1 shadow-sm">
                 <Command size={10} className="text-gray-400" />
                 <span className="text-[10px] font-black text-gray-400">K</span>
               </div>
-              {/* Close mobile search */}
               {mobileSearchOpen && (
                 <button 
                   onClick={() => setMobileSearchOpen(false)}
@@ -208,9 +290,8 @@ export default function Header({ user }: HeaderProps) {
           </div>
 
           {/* RIGHT: SYSTEM ACTIONS & USER PROFILE */}
-          <div className={`flex items-center gap-2 sm:gap-3 lg:gap-4 ${mobileSearchOpen ? 'hidden' : 'flex'}`}>
+          <div className={`flex items-center gap-2 sm:gap-3 ${mobileSearchOpen ? 'hidden' : 'flex'}`}>
             
-            {/* Mobile Search Trigger */}
             <motion.button 
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
@@ -220,12 +301,10 @@ export default function Header({ user }: HeaderProps) {
               <Search size={20} />
             </motion.button>
 
-            {/* Notification System */}
-            <div className="relative border-r border-orange-500/10 pr-2 sm:pr-3 lg:pr-4">
+            <div className="relative border-r border-orange-500/10 pr-2 sm:pr-3">
               <NotificationBell />
             </div>
 
-            {/* Settings Button - Hidden on small mobile */}
             <motion.button
               whileHover={{ scale: 1.05, rotate: 90 }}
               whileTap={{ scale: 0.95 }}
@@ -235,8 +314,7 @@ export default function Header({ user }: HeaderProps) {
             </motion.button>
 
             {/* User Profile Section */}
-            <div className="flex items-center gap-2 sm:gap-3 border-l border-orange-500/10 pl-2 sm:pl-3 lg:pl-4">
-              {/* User Info - Desktop Only */}
+            <div className="flex items-center gap-2 sm:gap-3 border-l border-orange-500/10 pl-2 sm:pl-3">
               <div className="hidden lg:flex flex-col text-right">
                 <p className="text-xs font-black uppercase tracking-wider text-white leading-none">
                   {user?.councilId || 'GUEST'}
@@ -254,11 +332,8 @@ export default function Header({ user }: HeaderProps) {
                   onClick={() => setShowUserMenu(!showUserMenu)}
                   className="group relative cursor-pointer shrink-0"
                 >
-                  <div className="flex h-9 w-9 sm:h-11 sm:w-11 items-center justify-center rounded-xl sm:rounded-2xl border-2 border-orange-500/20 bg-[#252525] shadow-lg transition-all group-hover:border-orange-500/50 group-hover:shadow-orange-500/20">
-                    <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-xl sm:rounded-xl bg-gradient-to-br from-orange-500 to-orange-600 text-xs sm:text-sm font-black text-white">
-                      {user?.councilId?.charAt(0).toUpperCase() || <User className="w-4 h-4 sm:w-5 sm:h-5"/>}
-                    </div>
-                  </div>
+                  <UserAvatar user={user} />
+
                   {/* Online Status Indicator */}
                   <div className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 sm:h-4 sm:w-4 items-center justify-center rounded-full bg-[#1A1A1A] shadow-sm border border-orange-500/20">
                     <div className="h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full bg-emerald-500 animate-pulse"></div>
@@ -269,13 +344,11 @@ export default function Header({ user }: HeaderProps) {
                 <AnimatePresence>
                   {showUserMenu && (
                     <>
-                      {/* Backdrop */}
                       <div 
                         className="fixed inset-0 z-40"
                         onClick={() => setShowUserMenu(false)}
                       />
                       
-                      {/* Menu */}
                       <motion.div
                         initial={{ opacity: 0, y: -10, scale: 0.95 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -283,18 +356,16 @@ export default function Header({ user }: HeaderProps) {
                         transition={{ duration: 0.2 }}
                         className="absolute right-0 top-full mt-3 w-56 sm:w-64 rounded-2xl border border-orange-500/20 bg-[#252525] shadow-2xl z-50 overflow-hidden"
                       >
-                        {/* User Info in Menu */}
                         <div className="border-b border-orange-500/10 p-4">
                           <p className="text-sm font-bold text-white">{user?.councilId || 'Guest User'}</p>
                           <p className="text-xs text-gray-400 mt-1">{user?.role?.replace('_', ' ') || 'No Role Assigned'}</p>
                         </div>
 
-                        {/* Menu Items */}
                         <div className="p-2">
-                          <MenuItem icon={User} label="Profile" onClick={() => setShowUserMenu(false)} />
+                          <MenuItem icon={User} label="Profile" onClick={handleProfileClick} />
                           <MenuItem icon={Settings} label="Settings" onClick={() => setShowUserMenu(false)} />
                           <div className="my-2 border-t border-orange-500/10" />
-                          <MenuItem icon={LogOut} label="Logout" onClick={() => setShowUserMenu(false)} danger />
+                          <MenuItem icon={LogOut} label="Logout" onClick={handleLogout} danger />
                         </div>
                       </motion.div>
                     </>
@@ -309,7 +380,6 @@ export default function Header({ user }: HeaderProps) {
   )
 }
 
-// Menu Item Component
 function MenuItem({ icon: Icon, label, onClick, danger = false }: any) {
   return (
     <motion.button

@@ -35,15 +35,18 @@ export default function BiometricRegistration() {
 
   const fetchRegisteredBiometrics = async () => {
     try {
-      const response = await fetch('http://localhost:5003/api/biometrics/all', {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      const { apiClient, ApiError } = await import('@/lib/api')
+      try {
+        const data = await apiClient.get('http://localhost:5003/api/biometrics/all')
+        if (Array.isArray(data)) setRegisteredBiometrics(data)
+        else setRegisteredBiometrics([])
+      } catch (err: any) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          try { localStorage.removeItem('token') } catch {}
+          toast.error('Unauthorized — please login again')
+          return
         }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setRegisteredBiometrics(data);
+        throw err
       }
     } catch (error) {
       console.error('Failed to fetch biometrics:', error);
@@ -74,20 +77,20 @@ export default function BiometricRegistration() {
 
   const fetchUserDetails = async (councilId: string) => {
     try {
-      const response = await fetch(`http://localhost:5003/api/users/${councilId}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
+      const { apiClient, ApiError } = await import('@/lib/api')
+      try {
+        const data = await apiClient.get(`http://localhost:5003/api/users/${councilId}`)
+        setUserDetails(data)
+        return true
+      } catch (err: any) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          try { localStorage.removeItem('token') } catch {}
+          toast.error('Unauthorized — please login again')
+          return false
         }
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        setUserDetails(data);
-        return true;
-      } else {
-        toast.error('User not found');
-        setUserDetails(null);
-        return false;
+        toast.error('User not found')
+        setUserDetails(null)
+        return false
       }
     } catch (error) {
       console.error('Failed to fetch user details:', error);
@@ -161,27 +164,21 @@ export default function BiometricRegistration() {
       if (!userExists) return;
 
       // Register the biometric
-      const response = await fetch('http://localhost:5003/api/biometrics/register', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          councilId,
-          fingerprintTemplate,
-          name: userDetails?.name
-        })
-      });
-
-      if (response.ok) {
+      const { apiClient, ApiError } = await import('@/lib/api')
+      try {
+        await apiClient.post('http://localhost:5003/api/biometrics/register', { councilId, fingerprintTemplate, name: userDetails?.name })
         toast.success('Biometric registered successfully!');
         setCouncilId('');
         setFingerprintTemplate(null);
         setUserDetails(null);
         await fetchRegisteredBiometrics();
-      } else {
-        throw new Error('Failed to register biometric');
+      } catch (err: any) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          try { localStorage.removeItem('token') } catch {}
+          toast.error('Unauthorized — please login again')
+          return
+        }
+        throw err
       }
     } catch (error) {
       console.error('Failed to register biometric:', error);
@@ -191,18 +188,18 @@ export default function BiometricRegistration() {
 
   const handleDelete = async (id: number) => {
     try {
-      const response = await fetch(`http://localhost:5003/api/biometrics/${id}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-
-      if (response.ok) {
+      const { apiClient, ApiError } = await import('@/lib/api')
+      try {
+        await apiClient.delete(`http://localhost:5003/api/biometrics/${id}`)
         setRegisteredBiometrics(registeredBiometrics.filter(b => b.id !== id));
         toast.success('Biometric registration deleted');
-      } else {
-        throw new Error('Failed to delete biometric registration');
+      } catch (err: any) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          try { localStorage.removeItem('token') } catch {}
+          toast.error('Unauthorized — please login again')
+          return
+        }
+        throw err
       }
     } catch (error) {
       console.error('Failed to delete biometric:', error);

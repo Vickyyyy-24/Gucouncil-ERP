@@ -9,6 +9,8 @@ const fs = require('fs');
 const csv = require('csv-parser');
 const { emitAttendanceUpdate } = require('./socket');
 const generateCommitteePdf = require('./utils/generateCommitteePdf')
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 
 
@@ -17,6 +19,7 @@ const { pool, initDB, User, UserProfile, Attendance, WorkReport, LeaveApplicatio
 
 // Load environment variables
 dotenv.config();
+const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
 
 const app = express();
 const PORT = process.env.PORT || 5005;
@@ -24,12 +27,54 @@ const PORT = process.env.PORT || 5005;
 // Initialize database on startup
 initDB();
 
-// Middleware
-app.use(cors());
+// Security & middleware
+
+app.set('trust proxy', 1);
+
+// Helmet with strict CSP
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        baseUri: ["'self'"],
+        fontSrc: ["'self'", "https:", "data:"],
+        formAction: ["'self'"],
+        frameAncestors: ["'self'"],
+        imgSrc: ["'self'", CLIENT_URL, "data:"],
+        objectSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+        upgradeInsecureRequests: [],
+      },
+    },
+    referrerPolicy: { policy: "no-referrer" },
+    crossOriginResourcePolicy: { policy: "same-origin" },
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    hsts: { maxAge: 31536000, includeSubDomains: true }, // 1 year HTTPS enforcement
+  })
+);
+
+// CORS
+app.use(cors({
+  origin: CLIENT_URL,
+  credentials: true,
+}));
+
+// Body parsers
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Static files
+// Rate limiting (auth endpoints)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/auth', authLimiter);
+
+// Static file serving
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Storage configuration
@@ -69,10 +114,13 @@ const authenticateToken = async (req, res, next) => {
     const user = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
     req.user = user;
     next();
-  } catch (err) {
-    return res.status(403).json({ message: 'Invalid token' });
-  }
-};
+  }catch (err) {
+  return res.status(401).json({
+    message: 'Token expired or invalid'
+  })
+}
+}
+
 
 // Role-based authorization middleware
 const authorizeRole = (...roles) => {
@@ -87,7 +135,7 @@ const authorizeRole = (...roles) => {
 // Routes
 
 // Authentication Routes
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { councilId, password } = req.body;
     
@@ -107,7 +155,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, councilId: user.council_id, role: user.role },
       process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '24h' }
+      { expiresIn: process.env.JWT_EXPIRES || '24h' }
     );
 
     // Log login
@@ -125,7 +173,7 @@ app.post('/api/auth/login', async (req, res) => {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Server error' });
   }
-});
+});             
 
 // Admin Routes
 app.post('/api/admin/create-user', authenticateToken, authorizeRole('admin'), async (req, res) => {
@@ -1183,22 +1231,230 @@ app.get('/api/gs/all-committees-insights', authenticateToken, authorizeRole('gs'
   }
 });
 
+// Backwards-compatible alias for older clients that call /api/gs/dashboard/summary
+// GS Routes - FIXED VERSION
+app.get('/api/gs/dashboard/summary', authenticateToken, authorizeRole('gs'), async (req, res) => {
+  try {
+    // 1️⃣ Total committees
+    const committeesRes = await pool.query(
+      'SELECT COUNT(DISTINCT committee_name) FROM user_profiles WHERE committee_name IS NOT NULL'
+    );
+    const totalCommittees = parseInt(committeesRes.rows[0].count) || 0;
+
+    // 2️⃣ Total members
+    const membersRes = await pool.query(
+      'SELECT COUNT(DISTINCT council_id) FROM user_profiles'
+    );
+    const totalMembers = parseInt(membersRes.rows[0].count) || 0;
+
+    // 3️⃣ Today's attendance
+    const attendanceRes = await pool.query(`
+      SELECT COUNT(DISTINCT user_id) FROM attendance_logs
+      WHERE punch_in::date = CURRENT_DATE
+    `);
+    const todayAttendance = parseInt(attendanceRes.rows[0].count) || 0;
+
+    // 4️⃣ Pending leaves (GS approval)
+    const pendingLeavesRes = await pool.query(`
+      SELECT COUNT(*) FROM leave_applications
+      WHERE gs_approval = false AND head_approval = true
+    `);
+    const pendingLeaves = parseInt(pendingLeavesRes.rows[0].count) || 0;
+
+    // Return summary data
+    res.json({
+      totalCommittees,
+      totalMembers,
+      todayAttendance,
+      pendingLeaves
+    });
+  } catch (error) {
+    console.error('❌ GS dashboard summary error:', error);
+    res.status(500).json({ 
+      message: 'Failed to load summary',
+      error: error.message 
+    });
+  }
+});
+
+// Return list of distinct committees (used by GS filters)
+app.get('/api/gs/committees', authenticateToken, authorizeRole('gs'), async (req, res) => {
+  try {
+    const result = await pool.query('SELECT DISTINCT committee_name FROM user_profiles WHERE committee_name IS NOT NULL');
+    const committees = result.rows.map(r => r.committee_name).filter(Boolean);
+    res.json(committees);
+  } catch (err) {
+    console.error('Error fetching committees:', err);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+// GET ATTENDANCE ANALYTICS BY COMMITTEE
+app.get(
+  '/api/gs/committee/attendance-analytics',
+  authenticateToken,
+  authorizeRole('gs', 'committee_head'),
+  async (req, res) => {
+    try {
+      const { committee, startDate, endDate } = req.query
+
+      // Debug logging
+      console.log('📊 Attendance Analytics Request:', {
+        userRole: req.user.role,
+        committee,
+        startDate,
+        endDate
+      })
+
+      if (!committee || committee === 'all') {
+        return res.status(400).json({ message: 'Committee required' })
+      }
+
+      let query = `
+        SELECT
+          DATE(al.punch_in) AS day,
+          COUNT(DISTINCT al.user_id) AS count
+        FROM attendance_logs al
+        JOIN users u ON u.id = al.user_id
+        JOIN user_profiles up ON up.council_id = u.council_id
+        WHERE up.committee_name = $1
+      `
+      
+      const params = [committee]
+      let paramIndex = 2
+
+      if (startDate) {
+        query += ` AND al.punch_in::date >= $${paramIndex}`
+        params.push(startDate)
+        paramIndex++
+      }
+
+      if (endDate) {
+        query += ` AND al.punch_in::date <= $${paramIndex}`
+        params.push(endDate)
+      }
+
+      query += ` GROUP BY day ORDER BY day ASC`
+
+      const result = await pool.query(query, params)
+
+      console.log('✅ Analytics returned:', result.rows.length, 'days')
+
+      res.json(
+        result.rows.map(r => ({
+          day: r.day,
+          count: Number(r.count),
+        }))
+      )
+    } catch (err) {
+      console.error('❌ Attendance analytics error:', err)
+      res.status(500).json({ 
+        message: 'Failed to load analytics',
+        error: err.message 
+      })
+    }
+  }
+)
+
+// GET COMMITTEE MEMBERS WITH ATTENDANCE
+app.get(
+  '/api/gs/committee/members',
+  authenticateToken,
+  authorizeRole('gs', 'committee_head'),
+  async (req, res) => {
+    try {
+      const { committee, startDate, endDate } = req.query
+
+      // Debug logging
+      console.log('👥 Committee Members Request:', {
+        userRole: req.user.role,
+        committee,
+        startDate,
+        endDate
+      })
+
+      if (!committee || committee === 'all') {
+        return res.status(400).json({ message: 'Committee required' })
+      }
+
+      let query = `
+        SELECT
+          u.id,
+          u.council_id,
+          up.name,
+          up.position,
+          COUNT(DISTINCT DATE(al.punch_in)) AS attendance_days,
+          ROUND(
+            COALESCE(
+              SUM(
+                EXTRACT(EPOCH FROM (al.punch_out - al.punch_in))
+              ) / 3600,
+              0
+            ),
+            2
+          ) AS total_hours
+        FROM users u
+        JOIN user_profiles up ON up.council_id = u.council_id
+        LEFT JOIN attendance_logs al
+          ON al.user_id = u.id
+      `
+
+      const params = [committee]
+      let paramIndex = 2
+
+      if (startDate) {
+        query += ` AND al.punch_in::date >= $${paramIndex}`
+        params.push(startDate)
+        paramIndex++
+      }
+
+      if (endDate) {
+        query += ` AND al.punch_in::date <= $${paramIndex}`
+        params.push(endDate)
+      }
+
+      query += `
+        WHERE up.committee_name = $1
+        GROUP BY u.id, u.council_id, up.name, up.position
+        ORDER BY up.name
+      `
+
+      const result = await pool.query(query, params)
+
+      console.log('✅ Members returned:', result.rows.length, 'members')
+
+      res.json(result.rows)
+    } catch (err) {
+      console.error('❌ Committee members error:', err)
+      res.status(500).json({ 
+        message: 'Failed to load members',
+        error: err.message 
+      })
+    }
+  }
+)
+
 app.put('/api/gs/approve-leave/:leaveId',
   authenticateToken,
   authorizeRole('gs'),
   async (req, res) => {
+    try {
+      const updatedLeave = await LeaveApplication.updateGSApproval(req.params.leaveId)
 
-    const updatedLeave = await LeaveApplication.updateGSApproval(req.params.leaveId)
+      emitLeaveUpdate({
+        type: 'approved',
+        leaveId: updatedLeave.id,
+        userId: updatedLeave.user_id,
+        timestamp: new Date().toISOString()
+      })
 
-    emitLeaveUpdate({
-      type: 'approved',
-      leaveId: updatedLeave.id,
-      userId: updatedLeave.user_id,
-      timestamp: new Date().toISOString()
-    })
+      res.json({ message: 'Approved by GS', leave: updatedLeave })
+    } catch (err) {
+      console.error('GS approve leave error:', err)
+      res.status(500).json({ message: 'Failed to approve leave' })
+    }
+  }
+)
 
-    res.json({ message: 'Approved by GS', leave: updatedLeave })
-})
 
 
 // Utility functions
@@ -1229,4 +1485,654 @@ const initDefaultAdmin = async () => {
     console.error('Error creating default admin:', error);
   }
 };
+app.post(
+  '/api/admin/bulk-create-profiles',
+  authenticateToken,
+  authorizeRole('admin'),
+  upload.single('csvFile'),
+  async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ message: 'CSV file required' })
+    }
+
+    const created = []
+    const updated = []
+    const errors = []
+
+    const rows = []
+
+    fs.createReadStream(req.file.path)
+      .pipe(csv())
+      .on('data', (row) => rows.push(row))
+      .on('end', async () => {
+        for (const row of rows) {
+          try {
+            const councilId = row['Council-id']?.trim()
+            if (!councilId) continue
+
+            let user = await User.findByCouncilId(councilId)
+
+            if (!user) {
+              user = await User.create({
+                council_id: councilId,
+                password: await bcrypt.hash('default123', 10),
+                role: 'member'
+              })
+            }
+
+            const profileData = {
+              council_id: councilId,
+              member_picture: row['Member Picture'] || null,
+              name: row['Name'],
+              enrollment_number: row['Enrollment Number'] || null,
+              committee_name: row['Committee/Team name']?.trim(),
+              position: row['Position'],
+              phone_number: row['Phone number'],
+              email_id: row['Email Id'],
+              address: row['Address'],
+              instagram: row['instagram'],
+              discord: row['Discord'],
+              linkedin: row['linkdin'],
+              snapchat: row['Snapchat'],
+              github: row['Github'],
+            }
+
+            const existingProfile =
+              await UserProfile.findByCouncilId(councilId)
+
+            if (existingProfile) {
+              await UserProfile.updateByCouncilId(councilId, profileData)
+              updated.push(councilId)
+            } else {
+              await UserProfile.create(profileData)
+              created.push(councilId)
+            }
+          } catch (err) {
+            errors.push(err.message)
+          }
+        }
+
+        fs.unlinkSync(req.file.path)
+
+        res.json({
+          created: created.length,
+          updated: updated.length,
+          total: rows.length,
+          errors,
+        })
+      })
+  }
+)
+app.get(
+  '/api/committees',
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT DISTINCT TRIM(committee_name) AS committee_name
+        FROM user_profiles
+        WHERE committee_name IS NOT NULL
+          AND TRIM(committee_name) <> ''
+        ORDER BY committee_name
+      `)
+
+      res.json(result.rows.map(r => r.committee_name))
+    } catch (err) {
+      console.error('Committee fetch error:', err)
+      res.status(500).json({ message: 'Failed to load committees' })
+    }
+  }
+)
+
+app.get(
+  '/api/admin/attendance-report',
+  authenticateToken,
+  authorizeRole('admin'),
+  async (req, res) => {
+    const { startDate, endDate, committee = 'all' } = req.query
+
+    try {
+      const { rows } = await pool.query(
+        ATTENDANCE_REPORT_SQL,
+        [startDate, endDate, committee]
+      )
+
+      if (!rows.length) {
+        return res.json([])
+      }
+
+      const grouped = {}
+
+      for (const r of rows) {
+        if (!grouped[r.committee_name]) {
+          grouped[r.committee_name] = {
+            committee: r.committee_name,
+            head: r.head_name || 'N/A',
+            members: []
+          }
+        }
+
+        grouped[r.committee_name].members.push({
+          name: r.name,
+          attendance: Number(r.attendance_days),
+          totalHours: Number(r.total_hours),
+          weeklyAvg: Number(r.weekly_avg),
+          dailyAvg: Number(r.daily_avg)
+        })
+      }
+
+      res.json(Object.values(grouped))
+    } catch (err) {
+      console.error('Attendance report error:', err)
+      res.status(500).json({ message: 'Failed to generate report' })
+    }
+  }
+)
+
+const ATTENDANCE_REPORT_SQL = `
+WITH attendance AS (
+  SELECT
+    up.committee_name,
+    up.name,
+    COUNT(DISTINCT DATE(al.punch_in)) AS attendance_days,
+    COALESCE(
+      SUM(
+        EXTRACT(EPOCH FROM (al.punch_out - al.punch_in))
+      ) / 3600,
+      0
+    ) AS total_hours
+  FROM attendance_logs al
+  JOIN users u ON u.id = al.user_id
+  JOIN user_profiles up ON up.council_id = u.council_id
+  WHERE
+    al.punch_in::date BETWEEN $1 AND $2
+    AND ($3 = 'all' OR up.committee_name = $3)
+  GROUP BY up.committee_name, up.name
+),
+range_meta AS (
+  SELECT
+    GREATEST((($2::date - $1::date + 1) / 7.0), 1) AS weeks,
+    GREATEST(($2::date - $1::date + 1), 1) AS days
+),
+heads AS (
+  SELECT
+    committee_name,
+    name AS head_name
+  FROM user_profiles
+  WHERE LOWER(position) = 'head'
+)
+SELECT
+  a.committee_name,
+  h.head_name,
+  a.name,
+  a.attendance_days,
+  ROUND(a.total_hours, 2) AS total_hours,
+  ROUND(a.total_hours / rm.weeks, 2) AS weekly_avg,
+  ROUND(a.total_hours / rm.days, 2) AS daily_avg
+FROM attendance a
+LEFT JOIN heads h ON h.committee_name = a.committee_name
+CROSS JOIN range_meta rm
+ORDER BY a.committee_name, a.name;
+`
+app.get(
+  '/api/admin/attendance-report/pdf',
+  authenticateToken,
+  authorizeRole('admin'),
+  async (req, res) => {
+    try {
+      const { committee = 'all', startDate, endDate } = req.query
+
+      if (!startDate || !endDate) {
+        return res.status(400).json({ message: 'Date range required' })
+      }
+
+      /* ============================
+         SINGLE OPTIMIZED QUERY
+      ============================ */
+      const params = [startDate, endDate]
+      let committeeFilter = ''
+
+      if (committee !== 'all') {
+        params.push(committee)
+        committeeFilter = `AND up.committee_name = $3`
+      }
+
+      const result = await pool.query(
+        `
+        SELECT
+          up.committee_name,
+          up.name,
+          up.position,
+          COUNT(DISTINCT DATE(al.punch_in)) AS attendance_days,
+          ROUND(
+            COALESCE(
+              SUM(
+                EXTRACT(EPOCH FROM (al.punch_out - al.punch_in))
+              ) / 3600,
+              0
+            ),
+            2
+          ) AS total_hours
+        FROM users u
+        JOIN user_profiles up ON up.council_id = u.council_id
+        LEFT JOIN attendance_logs al
+          ON al.user_id = u.id
+         AND al.punch_in::date BETWEEN $1 AND $2
+        WHERE up.committee_name IS NOT NULL
+        ${committeeFilter}
+        GROUP BY up.committee_name, up.name, up.position
+        ORDER BY up.committee_name, up.name
+        `,
+        params
+      )
+
+      /* ============================
+         SHAPE DATA FOR PDF
+      ============================ */
+      const grouped = {}
+
+      for (const row of result.rows) {
+        if (!grouped[row.committee_name]) {
+          grouped[row.committee_name] = {
+            committee: row.committee_name,
+            head: null,
+            members: []
+          }
+        }
+
+        if (
+          row.position &&
+          row.position.toLowerCase().includes('head')
+        ) {
+          grouped[row.committee_name].head = row.name
+        }
+
+        const days =
+          Math.max(
+            1,
+            Math.ceil(
+              (new Date(endDate) - new Date(startDate)) /
+                (1000 * 60 * 60 * 24)
+            )
+          )
+
+        grouped[row.committee_name].members.push({
+          name: row.name,
+          attendance: Number(row.attendance_days),
+          totalHours: Number(row.total_hours),
+          weeklyAvg: Number(
+            (row.total_hours / (days / 7)).toFixed(2)
+          ),
+          dailyAvg: Number(
+            (row.total_hours / days).toFixed(2)
+          ),
+        })
+      }
+
+      const reportData = Object.values(grouped)
+
+      if (reportData.length === 0) {
+        return res
+          .status(404)
+          .json({ message: 'No attendance data found' })
+      }
+
+      /* ============================
+         GENERATE PDF
+      ============================ */
+      const generateAttendancePdf =
+        require('./utils/generateAttendancePdf')
+
+      generateAttendancePdf(res, reportData, {
+        committee,
+        startDate,
+        endDate,
+      })
+    } catch (err) {
+      console.error('Attendance PDF error:', err)
+      res.status(500).json({ message: 'PDF export failed' })
+    }
+  }
+)
+app.get(
+  '/api/admin/logs',
+  authenticateToken,
+  authorizeRole('admin','gs'),
+  async (req, res) => {
+    try {
+      const {
+        type,
+        user,
+        action,
+        startDate,
+        endDate
+      } = req.query
+
+      const filters = []
+      const values = []
+
+      /* ================= DATE FILTER ================= */
+      if (startDate) {
+        values.push(startDate)
+        filters.push(`log_time >= $${values.length}`)
+      }
+
+      if (endDate) {
+        values.push(endDate)
+        filters.push(`log_time <= $${values.length}`)
+      }
+
+      if (user) {
+        values.push(`%${user}%`)
+        filters.push(`council_id ILIKE $${values.length}`)
+      }
+
+      if (action) {
+        values.push(`%${action}%`)
+        filters.push(`action ILIKE $${values.length}`)
+      }
+
+      const whereClause =
+        filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : ''
+
+      let sql = ''
+
+      /* ================= ATTENDANCE LOGS ================= */
+      if (type === 'attendance') {
+        sql = `
+          SELECT
+            al.id,
+            u.council_id,
+            CASE
+              WHEN al.punch_out IS NULL THEN 'Punch In'
+              ELSE 'Punch Out'
+            END AS action,
+            'Attendance recorded' AS description,
+            COALESCE(al.punch_out, al.punch_in) AS log_time
+          FROM attendance_logs al
+          JOIN users u ON u.id = al.user_id
+        `
+      }
+
+      /* ================= REPORT LOGS ================= */
+      else if (type === 'reports') {
+        sql = `
+          SELECT
+            wr.id,
+            u.council_id,
+            wr.status AS action,
+            wr.title AS description,
+            wr.created_at AS log_time
+          FROM work_reports wr
+          JOIN users u ON u.id = wr.user_id
+        `
+      }
+
+      /* ================= LEAVE LOGS ================= */
+      else if (type === 'leaves') {
+        sql = `
+          SELECT
+            la.id,
+            u.council_id,
+            CASE
+              WHEN la.gs_approval THEN 'Approved'
+              WHEN la.head_approval THEN 'Head Approved'
+              ELSE 'Applied'
+            END AS action,
+            la.title AS description,
+            la.created_at AS log_time
+          FROM leave_applications la
+          JOIN users u ON u.id = la.user_id
+        `
+      }
+
+      /* ================= LOGIN LOGS ================= */
+      else if (type === 'login') {
+        sql = `
+          SELECT
+            ll.id,
+            u.council_id,
+            'Login' AS action,
+            ll.ip_address AS description,
+            ll.login_time AS log_time
+          FROM login_logs ll
+          JOIN users u ON u.id = ll.user_id
+        `
+      }
+
+      /* ================= SYSTEM LOGS ================= */
+      else {
+        sql = `
+          SELECT
+            sl.id,
+            u.council_id,
+            sl.action,
+            sl.description,
+            sl.created_at AS log_time
+          FROM system_logs sl
+          LEFT JOIN users u ON u.id = sl.actor_user_id
+        `
+      }
+
+      const finalQuery = `
+        ${sql}
+        ${whereClause}
+        ORDER BY log_time DESC
+        LIMIT 500
+      `
+
+      const result = await pool.query(finalQuery, values)
+
+      res.json(
+        result.rows.map(r => ({
+          id: r.id,
+          user: r.council_id || 'SYSTEM',
+          action: r.action,
+          description: r.description,
+          created_at: r.log_time
+        }))
+      )
+    } catch (err) {
+      console.error('Logs error:', err)
+      res.status(500).json({ message: 'Failed to load logs' })
+    }
+  }
+)
+
+const generateLogsPdf = require('./utils/generateLogsPdf')
+
+app.get(
+  '/api/admin/logs/pdf',
+  authenticateToken,
+  authorizeRole('admin', 'gs', 'committee_head'),
+  async (req, res) => {
+    try {
+      const {
+        type = 'system',
+        user,
+        action,
+        severity,
+        startDate,
+        endDate
+      } = req.query
+
+      const filters = []
+      const values = []
+
+      const role = req.user.role
+      const councilId = req.user.councilId
+
+      let committeeName = null
+      if (role === 'committee_head') {
+        const profile = await UserProfile.findByCouncilId(councilId)
+        committeeName = profile?.committee_name
+      }
+
+      /* ================= DATE ================= */
+      if (startDate) {
+        values.push(startDate)
+        filters.push(`log_time >= $${values.length}`)
+      }
+
+      if (endDate) {
+        values.push(endDate)
+        filters.push(`log_time <= $${values.length}`)
+      }
+
+      if (user) {
+        values.push(`%${user}%`)
+        filters.push(`council_id ILIKE $${values.length}`)
+      }
+
+      if (action) {
+        values.push(`%${action}%`)
+        filters.push(`action ILIKE $${values.length}`)
+      }
+
+      if (severity) {
+        values.push(severity)
+        filters.push(`severity = $${values.length}`)
+      }
+
+      let sql = ''
+
+      /* ================= SAME QUERIES AS /logs ================= */
+      if (type === 'attendance') {
+        sql = `
+          SELECT
+            al.id,
+            u.council_id,
+            CASE
+              WHEN al.punch_out IS NULL THEN 'Punch In'
+              ELSE 'Punch Out'
+            END AS action,
+            'Attendance recorded' AS description,
+            'INFO' AS severity,
+            COALESCE(al.punch_out, al.punch_in) AS log_time,
+            up.committee_name
+          FROM attendance_logs al
+          JOIN users u ON u.id = al.user_id
+          JOIN user_profiles up ON up.council_id = u.council_id
+        `
+      } else if (type === 'reports') {
+        sql = `
+          SELECT
+            wr.id,
+            u.council_id,
+            wr.status AS action,
+            wr.title AS description,
+            'INFO' AS severity,
+            wr.created_at AS log_time,
+            up.committee_name
+          FROM work_reports wr
+          JOIN users u ON u.id = wr.user_id
+          JOIN user_profiles up ON up.council_id = u.council_id
+        `
+      } else if (type === 'leaves') {
+        sql = `
+          SELECT
+            la.id,
+            u.council_id,
+            CASE
+              WHEN la.gs_approval THEN 'GS Approved'
+              WHEN la.head_approval THEN 'Head Approved'
+              ELSE 'Applied'
+            END AS action,
+            la.title AS description,
+            CASE
+              WHEN la.gs_approval THEN 'INFO'
+              WHEN la.head_approval THEN 'WARNING'
+              ELSE 'INFO'
+            END AS severity,
+            la.created_at AS log_time,
+            up.committee_name
+          FROM leave_applications la
+          JOIN users u ON u.id = la.user_id
+          JOIN user_profiles up ON up.council_id = u.council_id
+        `
+      } else if (type === 'login') {
+        sql = `
+          SELECT
+            ll.id,
+            u.council_id,
+            'Login' AS action,
+            ll.ip_address AS description,
+            'INFO' AS severity,
+            ll.login_time AS log_time,
+            up.committee_name
+          FROM login_logs ll
+          JOIN users u ON u.id = ll.user_id
+          JOIN user_profiles up ON up.council_id = u.council_id
+        `
+      } else {
+        sql = `
+          SELECT
+            sl.id,
+            u.council_id,
+            sl.action,
+            sl.description,
+            sl.severity,
+            sl.created_at AS log_time,
+            NULL AS committee_name
+          FROM system_logs sl
+          LEFT JOIN users u ON u.id = sl.actor_user_id
+        `
+      }
+
+      if (role === 'committee_head' && committeeName) {
+        values.push(committeeName)
+        filters.push(`committee_name = $${values.length}`)
+      }
+
+      const whereClause =
+        filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : ''
+
+      const finalQuery = `
+        ${sql}
+        ${whereClause}
+        ORDER BY log_time DESC
+        LIMIT 1000
+      `
+
+      const result = await pool.query(finalQuery, values)
+
+      generateLogsPdf(res, {
+        title: `${type.toUpperCase()} Logs Report`,
+        filters: {
+          type,
+          user,
+          action,
+          severity,
+          startDate,
+          endDate
+        },
+        logs: result.rows.map(r => ({
+          user: r.council_id || 'SYSTEM',
+          action: r.action,
+          description: r.description,
+          severity: r.severity,
+          committee: r.committee_name,
+          created_at: r.log_time
+        }))
+      })
+    } catch (err) {
+      console.error('Logs PDF error:', err)
+      res.status(500).json({ message: 'Failed to export logs PDF' })
+    }
+  }
+)
+// ================= GLOBAL ERROR HANDLER (FIX) =================
+app.use((err, req, res, next) => {
+  console.error('❌ UNHANDLED SERVER ERROR:', err)
+
+  const status = err.status || 500
+
+  res.status(status).json({
+    message: err.message || 'Internal server error',
+    status
+  })
+})
+
+
+
 module.exports = app;
