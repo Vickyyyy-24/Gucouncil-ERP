@@ -2,22 +2,21 @@
 
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { io, Socket } from 'socket.io-client'
 import { useAuth } from '@/contexts/AuthContext'
 import { ApiError, apiClient } from '@/lib/api'
+import { getSocket } from '@/lib/socket'
 
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
 
 // GS / Member Components
 import GSInsights from '@/components/gs/GSInsights'
+import GsCommitteeActivity from '@/components/gs/GsCommitteeActivity'
 import AttendanceManagement from '@/components/admin/AttendanceManagement'
 import MemberProfile from '@/components/member/MemberProfile'
 import AttendanceTracker from '@/components/member/AttendanceTracker'
 import WorkReports from '@/components/member/WorkReports'
 import LeaveApplications from '@/components/member/LeaveApplications'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5005'
 
 export default function GsDashboard() {
   const router = useRouter()
@@ -28,7 +27,7 @@ export default function GsDashboard() {
   const [userProfile, setUserProfile] = useState<any>(null)
 
   /* =====================================================
-     🔐 CLIENT FALLBACK GUARD (GS ONLY)
+     CLIENT FALLBACK GUARD (GS ONLY)
      ===================================================== */
   useEffect(() => {
     if (loading) return
@@ -47,14 +46,12 @@ export default function GsDashboard() {
   }, [user, loading, logout, router])
 
   /* =====================================================
-     👤 FETCH PROFILE (WITH TOKEN)
+     FETCH PROFILE (WITH TOKEN & SOCKET LISTENER)
      ===================================================== */
   useEffect(() => {
-    let socket: Socket | null = null
-
     const fetchUserProfile = async () => {
       try {
-        // ✅ SET TOKEN BEFORE CALLING API
+        // SET TOKEN BEFORE CALLING API
         if (token) {
           apiClient.setToken(token)
         }
@@ -64,7 +61,7 @@ export default function GsDashboard() {
       } catch (err: any) {
         // GS users might not have profiles - that's OK
         if (err instanceof ApiError && err.status === 404) {
-          console.warn('ℹ️ GS user profile not found (OK)')
+          console.warn('⚠️ GS user profile not found (OK)')
           setUserProfile(null)
           return
         }
@@ -87,30 +84,47 @@ export default function GsDashboard() {
     if (token) {
       fetchUserProfile()
     }
-
-    // Setup socket connection
-    if (token) {
-      socket = io(API_URL, {
-        transports: ['websocket'],
-        auth: {
-          token: token
-        }
-      })
-
-      socket.on('profile_updated', (payload) => {
-        if (payload?.councilId === user?.councilId) {
-          fetchUserProfile()
-        }
-      })
-    }
-
-    return () => {
-      if (socket) socket.disconnect()
-    }
-  }, [token, user?.councilId, logout, router])
+  }, [token, logout, router])
 
   /* =====================================================
-     🧠 MERGE AUTH USER + PROFILE
+     SOCKET LISTENER FOR PROFILE UPDATES
+     ===================================================== */
+  useEffect(() => {
+    try {
+      const socket = getSocket()
+
+      if (!socket) {
+        console.warn('⛔ GsDashboard: Socket not initialized')
+        return
+      }
+
+      const handleProfileUpdated = (payload: any) => {
+        console.log('📡 Profile updated event received:', payload)
+        if (payload?.councilId === user?.councilId) {
+          console.log('✅ Refreshing profile for user:', user?.councilId)
+          // Re-fetch profile
+          if (token) {
+            apiClient.setToken(token)
+            apiClient
+              .getMyProfile()
+              .then((data) => setUserProfile(data))
+              .catch((err) => console.error('Failed to refresh profile:', err))
+          }
+        }
+      }
+
+      socket.on('profile_updated', handleProfileUpdated)
+
+      return () => {
+        socket.off('profile_updated', handleProfileUpdated)
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
+  }, [user?.councilId, token])
+
+  /* =====================================================
+     MERGE AUTH USER + PROFILE
      ===================================================== */
   const userWithAvatar = userProfile
     ? {
@@ -122,10 +136,11 @@ export default function GsDashboard() {
     : user
 
   /* =====================================================
-     📑 SIDEBAR TABS
+      SIDEBAR TABS
      ===================================================== */
   const tabs = [
     { id: 'insights', label: 'All Committees Insights', icon: 'BarChart3' },
+    { id: 'committee_activity', label: 'Committee Activity', icon: 'Activity' },
     { id: 'attendance1', label: 'Attendance Analytics', icon: 'Clock' },
     { id: 'profile', label: 'My Profile', icon: 'UserCircle' },
     { id: 'attendance', label: 'Attendance', icon: 'Clock' },
@@ -134,12 +149,14 @@ export default function GsDashboard() {
   ]
 
   /* =====================================================
-     🧭 TAB RENDERER
+      TAB RENDERER
      ===================================================== */
   const renderContent = () => {
     switch (activeTab) {
       case 'insights':
         return <GSInsights />
+      case 'committee_activity':
+        return <GsCommitteeActivity />
       case 'attendance1':
         return <AttendanceManagement />
       case 'profile':
@@ -156,7 +173,7 @@ export default function GsDashboard() {
   }
 
   /* =====================================================
-     🚪 LOGOUT HANDLER
+      LOGOUT HANDLER
      ===================================================== */
   const handleLogout = () => {
     logout()
@@ -164,7 +181,7 @@ export default function GsDashboard() {
   }
 
   /* =====================================================
-     🧩 UI
+      UI
      ===================================================== */
   if (loading || !user || user.role !== 'gs') {
     return null

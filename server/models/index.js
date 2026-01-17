@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const db = require('./db');
+const BiometricRegistration = require('./biometric'); 
 
 // Initialize database
 const initDB = async () => {
@@ -155,36 +156,76 @@ class UserProfile {
     return result.rows[0];
   }
 
- static async updateByCouncilId(council_id, updateData) {
-  const fields = Object.keys(updateData)
+  static async updateByCouncilId(council_id, updateData) {
+    const fieldMapping = {
+      council_id: 'council_id',
+      memberPicture: 'member_picture',
+      member_picture: 'member_picture',
+      name: 'name',
+      enrollmentNumber: 'enrollment_number',
+      enrollment_number: 'enrollment_number',
+      committeeName: 'committee_name',
+      committee_name: 'committee_name',
+      position: 'position',
+      phoneNumber: 'phone_number',
+      phone_number: 'phone_number',
+      emailId: 'email_id',
+      email_id: 'email_id',
+      address: 'address',
+      instagram: 'instagram',
+      discord: 'discord',
+      linkedin: 'linkedin',
+      snapchat: 'snapchat',
+      github: 'github'
+    };
 
-  if (fields.length === 0) {
-    return this.findByCouncilId(council_id)
+    const protectedFields = ['council_id', 'committee_name', 'position'];
+
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
+
+    for (const [key, value] of Object.entries(updateData)) {
+      if (value === undefined || value === null || value === '') continue;
+
+      const dbColumnName = fieldMapping[key];
+      
+      if (!dbColumnName) {
+        console.warn(`Skipping unknown field: ${key}`);
+        continue;
+      }
+
+      if (protectedFields.includes(dbColumnName)) {
+        console.warn(`Cannot update protected field: ${dbColumnName}`);
+        continue;
+      }
+
+      setClauses.push(`${dbColumnName} = $${paramIndex}`);
+      values.push(value);
+      paramIndex++;
+    }
+
+    if (setClauses.length === 0) {
+      return this.findByCouncilId(council_id);
+    }
+
+    values.push(council_id);
+
+    const query = `
+      UPDATE user_profiles
+      SET ${setClauses.join(', ')}, updated_at = NOW()
+      WHERE council_id = $${paramIndex}
+      RETURNING *
+    `;
+
+    const result = await db.query(query, values);
+    return result.rows[0];
   }
-
-  const values = Object.values(updateData)
-
-  const setClause = fields
-    .map((f, i) => `${f} = $${i + 2}`)
-    .join(', ')
-
-  const result = await db.query(
-    `
-    UPDATE user_profiles
-    SET ${setClause}, updated_at = NOW()
-    WHERE council_id = $1
-    RETURNING *
-    `,
-    [council_id, ...values]
-  )
-
-  return result.rows[0]
 }
-}
+
 // Attendance Model
 class Attendance {
   static async punchIn(user_id) {
-    // prevent double punch-in without punch-out
     const check = await db.query(
       `
       SELECT * FROM attendance_logs
@@ -237,7 +278,10 @@ class Attendance {
         punch_in,
         punch_out,
         ROUND(
-          EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600,
+          COALESCE(
+            EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600,
+            0
+          ),
           2
         ) AS total_hours
       FROM attendance_logs
@@ -247,7 +291,10 @@ class Attendance {
       [user_id]
     );
 
-    return result.rows;
+    return result.rows.map(r => ({
+      ...r,
+      total_hours: Number(r.total_hours) || 0
+    }));
   }
 
   static async getAttendanceStats(user_ids, days = 7) {
@@ -256,11 +303,25 @@ class Attendance {
       SELECT
         user_id,
         COUNT(*) AS total_days,
-        SUM(
-          EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600
+        COALESCE(
+          SUM(
+            CASE
+              WHEN punch_out IS NOT NULL
+              THEN EXTRACT(EPOCH FROM (punch_out - punch_in))
+              ELSE 0
+            END
+          ) / 3600,
+          0
         ) AS total_hours,
-        AVG(
-          EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600
+        COALESCE(
+          AVG(
+            CASE
+              WHEN punch_out IS NOT NULL
+              THEN EXTRACT(EPOCH FROM (punch_out - punch_in))
+              ELSE NULL
+            END
+          ) / 3600,
+          0
         ) AS avg_hours
       FROM attendance_logs
       WHERE user_id = ANY($1)
@@ -290,25 +351,24 @@ class WorkReport {
     return result.rows[0];
   }
 
-static async findByUserId(user_id) {
-  const query = `
-    SELECT
-      id,
-      title,
-      content,
-      report_date,
-      status,
-      file_path,
-      created_at
-    FROM work_reports
-    WHERE user_id = $1
-    ORDER BY created_at DESC
-  `;
+  static async findByUserId(user_id) {
+    const query = `
+      SELECT
+        id,
+        title,
+        content,
+        report_date,
+        status,
+        file_path,
+        created_at
+      FROM work_reports
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+    `;
 
-  const result = await db.query(query, [user_id]);
-  return result.rows;
-}
-
+    const result = await db.query(query, [user_id]);
+    return result.rows;
+  }
 
   static async updateStatus(id, status, reviewed_by = null) {
     const query = `
@@ -331,7 +391,6 @@ static async findByUserId(user_id) {
 
 // LeaveApplication Model
 class LeaveApplication {
-  /* ================= CREATE ================= */
   static async create(leaveData) {
     const { user_id, title, content, leave_from, leave_to, file_path } = leaveData
 
@@ -348,7 +407,6 @@ class LeaveApplication {
     return result.rows[0]
   }
 
-  /* ================= USER LEAVES ================= */
   static async findByUserId(user_id) {
     const result = await db.query(
       `
@@ -363,7 +421,6 @@ class LeaveApplication {
     return result.rows
   }
 
-  /* ================= PENDING FOR HEAD ================= */
   static async findPendingForHead(committee_name) {
     const result = await db.query(
       `
@@ -386,7 +443,6 @@ class LeaveApplication {
     return result.rows
   }
 
-  /* ================= PENDING FOR GS ================= */
   static async findPendingForGS() {
     const result = await db.query(
       `
@@ -408,7 +464,6 @@ class LeaveApplication {
     return result.rows
   }
 
-  /* ================= FIND BY ID ================= */
   static async findById(id) {
     const result = await db.query(
       `SELECT * FROM leave_applications WHERE id = $1`,
@@ -417,7 +472,6 @@ class LeaveApplication {
     return result.rows[0]
   }
 
-  /* ================= APPROVE BY HEAD ================= */
   static async updateHeadApproval(leaveId) {
     const result = await db.query(
       `
@@ -432,7 +486,6 @@ class LeaveApplication {
     return result.rows[0]
   }
 
-  /* ================= APPROVE BY GS ================= */
   static async updateGSApproval(leaveId) {
     const result = await db.query(
       `
@@ -447,54 +500,11 @@ class LeaveApplication {
     return result.rows[0]
   }
 
-  /* ================= DELETE ================= */
   static async delete(id) {
     await db.query(
       `DELETE FROM leave_applications WHERE id = $1`,
       [id]
     )
-  }
-}
-
-
-// BiometricRegistration Model
-class BiometricRegistration {
-  static async create(user_id, fingerprint_data) {
-    const query = `
-      INSERT INTO biometric_registrations (user_id, fingerprint_data)
-      VALUES ($1, $2)
-      RETURNING *
-    `;
-    
-    const result = await db.query(query, [user_id, fingerprint_data]);
-    return result.rows[0];
-  }
-
-  static async findByUserId(user_id) {
-    const query = 'SELECT * FROM biometric_registrations WHERE user_id = $1';
-    const result = await db.query(query, [user_id]);
-    return result.rows[0];
-  }
-
-static async findAll() {
-  const result = await db.query(`
-    SELECT
-      br.*,
-      up.name,
-      u.council_id
-    FROM biometric_registrations br
-    JOIN users u ON u.id = br.user_id
-    JOIN user_profiles up ON up.council_id = u.council_id
-    ORDER BY br.registered_at DESC
-  `)
-
-  return result.rows
-}
-
-
-  static async delete(id) {
-    const query = 'DELETE FROM biometric_registrations WHERE id = $1';
-    await db.query(query, [id]);
   }
 }
 

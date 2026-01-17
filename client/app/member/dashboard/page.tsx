@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { io, Socket } from 'socket.io-client'
 import { useAuth } from '@/contexts/AuthContext'
+import { onSocketEvent } from '@/lib/socket'
+import { toast } from 'react-toastify'
 
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
@@ -23,6 +24,7 @@ export default function MemberDashboard() {
   const [activeTab, setActiveTab] = useState('profile')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [userProfile, setUserProfile] = useState<any>(null)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   /* =====================================================
      🔐 CLIENT FALLBACK GUARD (MEMBER ONLY)
@@ -43,18 +45,18 @@ export default function MemberDashboard() {
     }
   }, [user, loading, logout, router])
 
-  // Do not return early here; we'll block render after all hooks to keep hook order stable
-
   /* =====================================================
      👤 FETCH PROFILE (SECURE)
      ===================================================== */
   useEffect(() => {
-    let socket: Socket | null = null
-
     const fetchUserProfile = async () => {
       try {
         const token = localStorage.getItem('token')
-        if (!token) return
+        if (!token) {
+          console.warn('⛔ MemberDashboard: No token available')
+          return
+        }
+
         const res = await fetch(`${API_URL}/api/profiles/my-profile`, {
           headers: { Authorization: `Bearer ${token}` },
         })
@@ -62,33 +64,88 @@ export default function MemberDashboard() {
         if (res.ok) {
           const data = await res.json()
           setUserProfile(data)
+          console.log('✅ Profile loaded successfully')
+        } else if (res.status === 401 || res.status === 403) {
+          console.error('❌ Unauthorized to fetch profile')
+          logout()
+          router.replace('/login')
         } else {
-          console.error('Failed fetching profile, status:', res.status)
+          console.error('❌ Failed fetching profile, status:', res.status)
         }
       } catch (err) {
-        console.error('Profile fetch failed:', err)
+        console.error('❌ Profile fetch failed:', err)
       }
     }
 
     fetchUserProfile()
+  }, [user, refreshTrigger, logout, router])
 
-    socket = io(API_URL, {
-      transports: ['websocket'],
-      auth: {
-        token: localStorage.getItem('token') || null
-      }
-    })
-
-    socket.on('profile_updated', (payload) => {
-      if (payload?.councilId === user.councilId) {
-        fetchUserProfile()
-      }
-    })
-
-    return () => {
-      if (socket) socket.disconnect()
+  /* =====================================================
+     🔌 SOCKET EVENT LISTENERS - GLOBAL SOCKET
+     ===================================================== */
+  useEffect(() => {
+    if (!user) {
+      console.warn('⛔ MemberDashboard: No user available for socket listeners')
+      return
     }
-  }, [user])
+
+    console.log('📡 Setting up socket listeners for user:', user.councilId)
+
+    try {
+      // Listen for profile updates
+      const unsubscribeProfile = onSocketEvent('profile_updated', (payload) => {
+        console.log('📡 profile_updated event received:', payload)
+        if (payload?.councilId === user.councilId) {
+          console.log('✅ Profile updated via socket')
+          setRefreshTrigger((prev) => prev + 1)
+          toast.info('Profile synchronized')
+        }
+      })
+
+      // Listen for attendance updates
+      const unsubscribeAttendance = onSocketEvent(
+        'attendance:update',
+        (payload) => {
+          console.log('📡 attendance:update event received:', payload)
+          if (payload?.userId === user.councilId || payload?.councilId === user.councilId) {
+            console.log('✅ Attendance updated via socket')
+            setRefreshTrigger((prev) => prev + 1)
+          }
+        }
+      )
+
+      // Listen for leave updates
+      const unsubscribeLeave = onSocketEvent('leave:updated', (payload) => {
+        console.log('📡 leave:updated event received:', payload)
+        if (payload?.userId === user.councilId || payload?.councilId === user.councilId) {
+          console.log('✅ Leave updated via socket')
+          setRefreshTrigger((prev) => prev + 1)
+          toast.info('Leave status updated')
+        }
+      })
+
+      // Listen for report updates
+      const unsubscribeReport = onSocketEvent('report:updated', (payload) => {
+        console.log('📡 report:updated event received:', payload)
+        if (payload?.userId === user.councilId || payload?.councilId === user.councilId) {
+          console.log('✅ Report updated via socket')
+          setRefreshTrigger((prev) => prev + 1)
+          toast.info('Report status updated')
+        }
+      })
+
+      // Cleanup all listeners when component unmounts or user changes
+      return () => {
+        console.log('🧹 Cleaning up socket listeners')
+        unsubscribeProfile()
+        unsubscribeAttendance()
+        unsubscribeLeave()
+        unsubscribeReport()
+      }
+    } catch (error) {
+      console.error('❌ Socket listener setup error:', error)
+    }
+  }, [user, user?.councilId])
 
   /* =====================================================
      🧠 MERGE AUTH USER + PROFILE
@@ -139,9 +196,8 @@ export default function MemberDashboard() {
   }
 
   /* =====================================================
-     🧩 UI
+     🧩 UI - RENDER GUARD
      ===================================================== */
-  // Final render guard to prevent UI flash; placed after all hooks so hook order is stable
   if (loading || !user || user.role !== 'committee_member') {
     return null
   }

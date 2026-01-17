@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io } from 'socket.io-client'
+import { getSocket } from '@/lib/socket'
 import { toast } from 'react-toastify'
 import { 
   Users, 
@@ -60,13 +60,32 @@ export default function AttendanceManagement() {
     }
   }, [data])
 
-  /* ================= SOCKET & DATA FETCHING ================= */
+  /* ================= SOCKET LISTENER ================= */
   useEffect(() => {
-    const socket = io(API)
-    socket.on('attendance:update', () => fetchReport())
-    return () => { socket.disconnect() }
+    try {
+      const socket = getSocket()
+
+      if (!socket) {
+        console.warn('⛔ AttendanceManagement: Socket not initialized')
+        return
+      }
+
+      const handleAttendanceUpdate = () => {
+        console.log('📡 Attendance update received, refreshing report')
+        fetchReport()
+      }
+
+      socket.on('attendance:update', handleAttendanceUpdate)
+
+      return () => {
+        socket.off('attendance:update', handleAttendanceUpdate)
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
   }, [])
 
+  /* ================= FETCH COMMITTEES ================= */
   useEffect(() => {
     if (!token) return
     ;(async () => {
@@ -79,7 +98,9 @@ export default function AttendanceManagement() {
       } catch (err: any) {
         const status = err && (err.status || err?.statusCode || (err?.body && err.body.status))
         if (status === 401 || status === 403) {
-          try { localStorage.removeItem('token') } catch {}
+          try {
+            localStorage.removeItem('token')
+          } catch {}
           setCommittees([])
           toast.error('Unauthorized — please login')
           return
@@ -91,34 +112,35 @@ export default function AttendanceManagement() {
     })()
   }, [token])
 
+  /* ================= FETCH REPORT ================= */
   const fetchReport = useCallback(async () => {
     if (!token || !dateRange.start || !dateRange.end) {
-        toast.info("Please select a date range first");
-        return;
+      toast.info('Please select a date range first')
+      return
     }
     try {
       setLoading(true)
-      try {
-        const { apiClient, ApiError } = await import('@/lib/api')
-        const params = `?committee=${selectedCommittee}&startDate=${dateRange.start}&endDate=${dateRange.end}`
-        const resp = await apiClient.get(`/api/admin/attendance-report${params}`)
-        setData(Array.isArray(resp) ? resp : [])
-      } catch (err: any) {
-        const status = err && (err.status || err?.statusCode || (err?.body && err.body.status))
-        if (status === 401 || status === 403) {
-          try { localStorage.removeItem('token') } catch {}
-          toast.error('Unauthorized — please login')
-          return
-        }
-        toast.error('Failed to load report')
+      const { apiClient, ApiError } = await import('@/lib/api')
+      const params = `?committee=${selectedCommittee}&startDate=${dateRange.start}&endDate=${dateRange.end}`
+      const resp = await apiClient.get(`/api/admin/attendance-report${params}`)
+      setData(Array.isArray(resp) ? resp : [])
+    } catch (err: any) {
+      const status = err && (err.status || err?.statusCode || (err?.body && err.body.status))
+      if (status === 401 || status === 403) {
+        try {
+          localStorage.removeItem('token')
+        } catch {}
+        toast.error('Unauthorized — please login')
+        return
       }
-    } catch {
+      console.error('Failed to load report:', err)
       toast.error('Failed to load report')
     } finally {
       setLoading(false)
     }
   }, [token, selectedCommittee, dateRange])
 
+  /* ================= DOWNLOAD PDF ================= */
   const downloadPdf = async () => {
     if (!token || !dateRange.start || !dateRange.end) {
       toast.error('Select date range first')
@@ -129,6 +151,7 @@ export default function AttendanceManagement() {
         `${API}/api/admin/attendance-report/pdf?committee=${selectedCommittee}&startDate=${dateRange.start}&endDate=${dateRange.end}`,
         { headers: { Authorization: `Bearer ${token}` } }
       )
+      if (!res.ok) throw new Error('PDF generation failed')
       const blob = await res.blob()
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -137,7 +160,10 @@ export default function AttendanceManagement() {
       document.body.appendChild(a)
       a.click()
       a.remove()
-    } catch {
+      window.URL.revokeObjectURL(url)
+      toast.success('PDF downloaded successfully')
+    } catch (err) {
+      console.error('PDF download error:', err)
       toast.error('PDF generation failed')
     }
   }
@@ -223,6 +249,7 @@ export default function AttendanceManagement() {
                 type="date"
                 title="Start Cycle"
                 aria-label="Start Cycle"
+                value={dateRange.start}
                 onChange={e => setDateRange(r => ({ ...r, start: e.target.value }))}
                 className="w-full bg-black/40 border border-slate-800 text-white rounded-2xl px-5 py-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold [color-scheme:dark]"
               />
@@ -233,6 +260,7 @@ export default function AttendanceManagement() {
                 type="date"
                 title="End Cycle"
                 aria-label="End Cycle"
+                value={dateRange.end}
                 onChange={e => setDateRange(r => ({ ...r, end: e.target.value }))}
                 className="w-full bg-black/40 border border-slate-800 text-white rounded-2xl px-5 py-4 focus:ring-2 focus:ring-indigo-500 outline-none transition-all font-bold [color-scheme:dark]"
               />
@@ -248,7 +276,7 @@ export default function AttendanceManagement() {
               <p className="text-indigo-400 font-black uppercase tracking-[0.3em] text-xs">Decrypting Records...</p>
             </motion.div>
           ) : data.length === 0 ? (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-32 bg-slate-900/20 rounded-[2.5rem] border-2 border-dashed border-slate-800">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-center py-32 bg-slate-900/20 border-2 border-dashed border-slate-800">
               <Database className="mx-auto text-slate-700 mb-6" size={64} />
               <p className="text-slate-500 font-black uppercase tracking-widest">No Manifest Loaded</p>
               <p className="text-slate-600 text-sm mt-2 font-medium">Configure unit scope and date cycles above.</p>
@@ -261,7 +289,7 @@ export default function AttendanceManagement() {
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: idx * 0.1 }}
-                  className="bg-slate-900/40 border border-slate-800/50 rounded-[2.5rem] overflow-hidden backdrop-blur-md shadow-2xl"
+                  className="bg-slate-900/40 border border-slate-800/50 overflow-hidden backdrop-blur-md shadow-2xl"
                 >
                   <div className="p-8 border-b border-slate-800/50 bg-gradient-to-r from-indigo-500/5 to-transparent flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
                     <div className="flex items-center gap-5">
@@ -301,7 +329,7 @@ export default function AttendanceManagement() {
                               </span>
                             </td>
                             <td className="px-8 py-5 text-center">
-                                <span className="text-slate-300 font-mono font-bold text-lg">{m.totalHours}<span className="text-xs text-slate-600 ml-1">HRS</span></span>
+                              <span className="text-slate-300 font-mono font-bold text-lg">{m.totalHours}<span className="text-xs text-slate-600 ml-1">HRS</span></span>
                             </td>
                             <td className="px-8 py-5 text-center text-slate-400 font-bold">{m.weeklyAvg}h</td>
                             <td className="px-8 py-5 text-center text-slate-400 font-bold">{m.dailyAvg}h</td>

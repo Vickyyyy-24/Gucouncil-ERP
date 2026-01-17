@@ -35,20 +35,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true)
   const router = useRouter()
 
+  // Only run on client side
   useEffect(() => {
-    const storedToken = localStorage.getItem('token')
-    const storedUser = localStorage.getItem('user')
-    
-    if (storedToken && storedUser) {
-      setToken(storedToken)
-      setUser(JSON.parse(storedUser))
-    }
-    // Ensure apiClient has the token if present
     try {
-      const t = localStorage.getItem('token')
-      if (t) apiClient.setToken(t)
-    } catch {}
-    setLoading(false)
+      const storedToken = localStorage.getItem('token')
+      const storedUser = localStorage.getItem('user')
+      
+      if (storedToken && storedUser) {
+        setToken(storedToken)
+        setUser(JSON.parse(storedUser))
+        apiClient.setToken(storedToken)
+      }
+    } catch (error) {
+      console.error('Failed to load auth from storage:', error)
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   const login = async (councilId: string, password: string) => {
@@ -57,11 +61,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setToken(data.token)
       setUser(data.user)
-      localStorage.setItem('token', data.token)
-      localStorage.setItem('user', JSON.stringify(data.user))
+      
+      // Only use localStorage on client
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('token', data.token)
+        localStorage.setItem('user', JSON.stringify(data.user))
+      }
 
-      // Ensure central API client uses the token
-      try { apiClient.setToken(data.token) } catch {}
+      apiClient.setToken(data.token)
 
       // Redirect based on role
       switch (data.user.role) {
@@ -80,10 +87,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       toast.success('Login successful!')
     } catch (error: any) {
-      // Network errors (e.g. failed to fetch) will surface here
       const msg = error?.message || 'Login failed'
       if (msg.toLowerCase().includes('failed to fetch') || msg.toLowerCase().includes('network')) {
-        toast.error(`Unable to reach backend. Check server and API_URL (${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'})`)
+        toast.error(
+          `Unable to reach backend. Check server and API_URL (${
+            process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+          })`
+        )
       } else {
         toast.error(msg)
       }
@@ -94,9 +104,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     setUser(null)
     setToken(null)
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-  try { apiClient.clearToken() } catch {}
+    
+    // Only use localStorage on client
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+    }
+    
+    try {
+      apiClient.clearToken()
+    } catch {}
+    
     router.push('/login')
     toast.info('Logged out successfully')
   }

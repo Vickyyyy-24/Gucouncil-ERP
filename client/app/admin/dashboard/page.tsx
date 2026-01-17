@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { io, Socket } from 'socket.io-client'
 import { useAuth } from '@/contexts/AuthContext'
+import { getSocket } from '@/lib/socket'
 
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
@@ -51,12 +51,13 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (!user || user.role !== 'admin') return
 
-    let socket: Socket | null = null
-
     const fetchProfile = async () => {
       try {
         const token = localStorage.getItem('token')
-        if (!token) return
+        if (!token) {
+          console.warn('⛔ AdminDashboard: No token available')
+          return
+        }
 
         const res = await fetch(`${API_URL}/api/profiles/my-profile`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -65,29 +66,68 @@ export default function AdminDashboard() {
         if (res.ok) {
           const data = await res.json()
           setUserProfile(data)
+          console.log('✅ Admin profile loaded successfully')
+        } else if (res.status === 401 || res.status === 403) {
+          console.error('❌ Unauthorized to fetch admin profile')
+          logout()
+          router.replace('/login')
+        } else {
+          console.error('❌ Failed to fetch admin profile, status:', res.status)
         }
       } catch (err) {
-        console.error('Profile fetch failed:', err)
+        console.error('❌ Profile fetch failed:', err)
       }
     }
 
     fetchProfile()
+  }, [user, logout, router])
 
-    socket = io(API_URL, {
-      transports: ['websocket'],
-      auth: { token: localStorage.getItem('token') },
-    })
-
-    socket.on('profile_updated', (payload) => {
-      if (payload?.councilId === user.councilId) {
-        fetchProfile()
-      }
-    })
-
-    return () => {
-      socket?.disconnect()
+  /* ================= SOCKET LISTENER FOR PROFILE UPDATES ================= */
+  useEffect(() => {
+    if (!user || user.role !== 'admin') {
+      console.warn('⛔ AdminDashboard: No admin user available for socket listeners')
+      return
     }
-  }, [user])
+
+    try {
+      const socket = getSocket()
+
+      if (!socket) {
+        console.warn('⛔ AdminDashboard: Socket not initialized')
+        return
+      }
+
+      console.log('📡 Setting up socket listener for admin profile updates')
+
+      const handleProfileUpdated = (payload: any) => {
+        console.log('📡 profile_updated event received:', payload)
+        if (payload?.councilId === user.councilId) {
+          console.log('✅ Admin profile updated via socket, refreshing...')
+          // Re-fetch profile
+          const token = localStorage.getItem('token')
+          if (token) {
+            fetch(`${API_URL}/api/profiles/my-profile`, {
+              headers: { Authorization: `Bearer ${token}` },
+            })
+              .then((res) => res.ok && res.json())
+              .then((data) => {
+                if (data) setUserProfile(data)
+              })
+              .catch((err) => console.error('Failed to refresh profile:', err))
+          }
+        }
+      }
+
+      socket.on('profile_updated', handleProfileUpdated)
+
+      return () => {
+        console.log('🧹 Cleaning up admin socket listener')
+        socket.off('profile_updated', handleProfileUpdated)
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
+  }, [user, user?.councilId])
 
   /* ================= SAFE RENDER BLOCK ================= */
   if (loading || !user || user.role !== 'admin') {
@@ -145,7 +185,7 @@ export default function AdminDashboard() {
 
   /* ================= UI ================= */
   return (
-    <div className="min-h-screen w-screen bg-slate-50 flex overflow-hidden fixed inset-0">
+    <div className="min-h-screen w-screen bg-[#252525] flex overflow-hidden fixed inset-0">
       <Sidebar
         tabs={tabs}
         activeTab={activeTab}
@@ -164,7 +204,7 @@ export default function AdminDashboard() {
           onLogout={logout}
         />
 
-        <main className="flex-1 overflow-y-auto bg-slate-50">
+        <main className="flex-1 overflow-y-auto bg-[#1A1A1A]">
           {renderContent()}
         </main>
       </div>

@@ -16,17 +16,16 @@ type LogItem = {
 export default function LiveActivityFeed({ refresh }: { refresh: number }) {
   const [logs, setLogs] = useState<LogItem[]>([])
   const router = useRouter()
-  const { token, logout } = useAuth() // ✅ use AuthContext token
+  const { token, logout } = useAuth()
 
   /* ================= FETCH LOGS ================= */
-
   useEffect(() => {
     if (!token) {
       console.warn('⛔ LiveActivityFeed: token not ready, skipping API call')
       return
     }
 
-    apiClient.setToken(token) // ✅ CRITICAL
+    apiClient.setToken(token)
 
     let mounted = true
 
@@ -37,8 +36,12 @@ export default function LiveActivityFeed({ refresh }: { refresh: number }) {
         if (mounted) setLogs(normalized)
       } catch (err) {
         if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-          try { localStorage.removeItem('token') } catch {}
-          try { logout() } catch {}
+          try {
+            localStorage.removeItem('token')
+          } catch {}
+          try {
+            logout()
+          } catch {}
           router.replace('/login')
           return
         }
@@ -53,25 +56,33 @@ export default function LiveActivityFeed({ refresh }: { refresh: number }) {
     return () => {
       mounted = false
     }
-  }, [token, refresh])
+  }, [token, refresh, logout])
 
   /* ================= SOCKET UPDATES ================= */
-
   useEffect(() => {
-    const socket = getSocket()
-    if (!socket.connected) socket.connect()
+    try {
+      const socket = getSocket()
 
-    socket.on('system:log', (log: LogItem) => {
-      setLogs(prev => [log, ...prev].slice(0, 20))
-    })
+      if (!socket) {
+        console.warn('⛔ LiveActivityFeed: Socket not initialized')
+        return
+      }
 
-    return () => {
-      socket.off('system:log')
+      const handleSystemLog = (log: LogItem) => {
+        setLogs((prev) => [log, ...prev].slice(0, 20))
+      }
+
+      socket.on('system:log', handleSystemLog)
+
+      return () => {
+        socket.off('system:log', handleSystemLog)
+      }
+    } catch (error) {
+      console.error('Socket listener error:', error)
     }
   }, [])
 
   /* ================= UI ================= */
-
   return (
     <div className="flex flex-col h-full min-h-[400px]">
       {/* TERMINAL HEADER */}
@@ -106,7 +117,9 @@ export default function LiveActivityFeed({ refresh }: { refresh: number }) {
                   <div className="flex items-center gap-2">
                     <span className="text-[9px] font-mono text-cyan-500 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">
                       {log.created_at
-                        ? new Date(log.created_at).toLocaleTimeString([], { hour12: false })
+                        ? new Date(log.created_at).toLocaleTimeString([], {
+                            hour12: false,
+                          })
                         : '00:00:00'}
                     </span>
                     <span className="text-[11px] font-bold text-blue-100 uppercase">

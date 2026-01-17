@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
-import { io } from 'socket.io-client'
+import { onSocketEvent } from '@/lib/socket'
 import {
   FileText,
   Calendar,
@@ -17,7 +17,6 @@ import {
   AlertCircle
 } from 'lucide-react'
 
-const API = 'http://localhost:5005'
 type Tab = 'leaves' | 'reports'
 
 export default function CommitteeActivityPage() {
@@ -28,69 +27,108 @@ export default function CommitteeActivityPage() {
   const [rejectId, setRejectId] = useState<number | null>(null)
   const [rejectReason, setRejectReason] = useState('')
 
+  /* ================= SOCKET LISTENER FOR UPDATES ================= */
   useEffect(() => {
-    const socket = io(API)
-    socket.on('leave_update', () => {
-      toast.info('Ledger Update: Leave status synchronized', { icon: <ShieldCheck className="text-orange-500"/> })
-      fetchLeaves()
-    })
-    return () => { socket.disconnect() }
+    try {
+      const unsubscribe = onSocketEvent('leave_update', () => {
+        console.log('📡 leave_update event received')
+        toast.info('Ledger Update: Leave status synchronized', { 
+          icon: <ShieldCheck className="text-orange-500"/> 
+        })
+        fetchLeaves()
+      })
+
+      return () => {
+        console.log('🧹 Cleaning up committee activity socket listener')
+        unsubscribe()
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
   }, [])
 
+  /* ================= FETCH DATA WHEN TAB CHANGES ================= */
   useEffect(() => {
     fetchAll()
   }, [tab])
 
-  const fetchAll = async () => {
-    setLoading(true)
-    tab === 'leaves' ? await fetchLeaves() : await fetchReports()
-    setLoading(false)
-  }
-
-  const authHeader = () => ({
-    Authorization: `Bearer ${localStorage.getItem('token')}`,
-  })
-
   const fetchLeaves = async () => {
     try {
-  const { apiClient } = await import('@/lib/api')
-  const data = await apiClient.get('/api/head/committee/leaves')
-  setLeaves(Array.isArray(data) ? data : [])
-    } catch {
+      const { apiClient } = await import('@/lib/api')
+      const data = await apiClient.get('/api/head/committee/leaves')
+      setLeaves(Array.isArray(data) ? data : [])
+      console.log('✅ Leaves loaded successfully')
+    } catch (error) {
+      console.error('❌ Fetch leaves error:', error)
       toast.error('Registry Error: Failed to load leave applications')
     }
   }
 
   const fetchReports = async () => {
     try {
-  const { apiClient } = await import('@/lib/api')
-  const data = await apiClient.get('/api/head/committee/reports')
-  setReports(Array.isArray(data) ? data : [])
-    } catch {
+      const { apiClient } = await import('@/lib/api')
+      const data = await apiClient.get('/api/head/committee/reports')
+      setReports(Array.isArray(data) ? data : [])
+      console.log('✅ Reports loaded successfully')
+    } catch (error) {
+      console.error('❌ Fetch reports error:', error)
       toast.error('Registry Error: Failed to load work reports')
     }
   }
 
+  const fetchAll = async () => {
+    setLoading(true)
+    try {
+      tab === 'leaves' ? await fetchLeaves() : await fetchReports()
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const approveLeave = async (id: number) => {
-  const { apiClient } = await import('@/lib/api')
-  await apiClient.post(`/api/head/approve-leave/${id}`, {})
-    toast.success('Authorization Granted: Leave Approved')
-    fetchLeaves()
+    try {
+      const { apiClient } = await import('@/lib/api')
+      await apiClient.post(`/api/head/approve-leave/${id}`, {})
+      toast.success('Authorization Granted: Leave Approved')
+      console.log('✅ Leave approved successfully')
+      await fetchLeaves()
+    } catch (error) {
+      console.error('❌ Approve leave error:', error)
+      toast.error('Failed to approve leave')
+    }
   }
 
   const rejectLeave = async () => {
-    if (!rejectId || !rejectReason) return
-  await (await import('@/lib/api')).apiClient.post(`/api/head/reject-leave/${rejectId}`, { reason: rejectReason })
-    toast.warn('Authorization Denied: Application Rejected')
-    setRejectId(null)
-    setRejectReason('')
-    fetchLeaves()
+    if (!rejectId || !rejectReason.trim()) {
+      toast.error('Rejection reason is required')
+      return
+    }
+
+    try {
+      const { apiClient } = await import('@/lib/api')
+      await apiClient.post(`/api/head/reject-leave/${rejectId}`, { reason: rejectReason })
+      toast.warn('Authorization Denied: Application Rejected')
+      console.log('✅ Leave rejected successfully')
+      setRejectId(null)
+      setRejectReason('')
+      await fetchLeaves()
+    } catch (error) {
+      console.error('❌ Reject leave error:', error)
+      toast.error('Failed to reject leave')
+    }
   }
 
   const reviewReport = async (id: number) => {
-    await (await import('@/lib/api')).apiClient.post(`/api/head/review-report/${id}`, {})
-    toast.success('Audit Logged: Report Reviewed')
-    fetchReports()
+    try {
+      const { apiClient } = await import('@/lib/api')
+      await apiClient.post(`/api/head/review-report/${id}`, {})
+      toast.success('Audit Logged: Report Reviewed')
+      console.log('✅ Report reviewed successfully')
+      await fetchReports()
+    } catch (error) {
+      console.error('❌ Review report error:', error)
+      toast.error('Failed to review report')
+    }
   }
 
   if (loading) return (
@@ -139,8 +177,8 @@ export default function CommitteeActivityPage() {
             <div className="flex items-center gap-2 text-orange-500 font-bold text-xs sm:text-sm uppercase tracking-wider">
               <Clock className="w-4 h-4 sm:w-5 sm:h-5" /> Real-time Audit Stream
             </div>
-            <h1 className="text-3xl sm:text-4xl lg:text-5xl font-bold text-white tracking-tight leading-none">
-              Committee <span className="text-orange-500">Activity</span>
+            <h1 className="text-4xl md:text-5xl font-black tracking-tight text-white italic uppercase">
+              COMMITTEE <span className="text-orange-500 not-italic">ACTIVITY</span>
             </h1>
           </div>
 

@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS work_reports (
   report_date DATE,
   status VARCHAR(20) DEFAULT 'submitted',
   file_path TEXT,
-  reviewed_by INTEGER,
+  reviewed_by INTEGER, 
   reviewed_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -84,3 +84,49 @@ CREATE TABLE IF NOT EXISTS system_logs (
   severity VARCHAR(20) DEFAULT 'INFO',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Index for fast filtering by created_at (most common query)
+CREATE INDEX IF NOT EXISTS idx_system_logs_created_at 
+ON system_logs(created_at DESC);
+
+-- Index for filtering by actor (who made the change)
+CREATE INDEX IF NOT EXISTS idx_system_logs_actor_user_id 
+ON system_logs(actor_user_id);
+
+-- Index for filtering by action type
+CREATE INDEX IF NOT EXISTS idx_system_logs_action 
+ON system_logs(action);
+
+-- Index for filtering by entity type
+CREATE INDEX IF NOT EXISTS idx_system_logs_entity_type 
+ON system_logs(entity_type);
+
+-- Index for filtering by severity (warnings/errors)
+CREATE INDEX IF NOT EXISTS idx_system_logs_severity 
+ON system_logs(severity);
+
+-- Composite index for common filter combinations
+CREATE INDEX IF NOT EXISTS idx_system_logs_actor_role_action 
+ON system_logs(actor_role, action, created_at DESC);
+
+-- Run this in your PostgreSQL database
+CREATE TABLE IF NOT EXISTS biometric_registrations (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  council_id VARCHAR(255) UNIQUE NOT NULL REFERENCES users(council_id),
+  name VARCHAR(255) NOT NULL,
+  fingerprint_template TEXT NOT NULL,
+  is_active BOOLEAN DEFAULT true,
+  registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT unique_user_biometric UNIQUE(user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_biometric_user_id 
+ON biometric_registrations(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_biometric_council_id 
+ON biometric_registrations(council_id);
+
+CREATE INDEX IF NOT EXISTS idx_biometric_is_active 
+ON biometric_registrations(is_active);

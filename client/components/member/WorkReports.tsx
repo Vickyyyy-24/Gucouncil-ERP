@@ -100,7 +100,7 @@ export default function WorkReports() {
             <History className="w-3 h-3 sm:w-4 sm:h-4" /> Professional Archive
           </div>
           <h1 className="text-2xl sm:text-3xl lg:text-4xl font-black text-emerald-950 tracking-tighter italic leading-none">
-            Work <span className="text-amber-500 not-italic">Ledger</span>
+            Work <span className="text-amber-500 not-italic">Report</span>
           </h1>
         </div>
         <button
@@ -137,7 +137,7 @@ export default function WorkReports() {
                 </div>
                 <div className="space-y-2 group">
                   <label className="text-[9px] sm:text-[10px] font-black text-emerald-900/30 uppercase tracking-wider sm:tracking-widest flex items-center gap-1.5 sm:gap-2 group-focus-within:text-amber-500 transition-colors">
-                    <Calendar className="w-3 h-3" /> Date of Execution
+                    <Calendar className="w-3 h-3" /> Date of Report
                   </label>
                   <input
                     type="date"
@@ -152,7 +152,7 @@ export default function WorkReports() {
 
               <div className="space-y-3 sm:space-y-4">
                 <label className="text-[9px] sm:text-[10px] font-black text-emerald-900/30 uppercase tracking-wider sm:tracking-widest flex items-center gap-1.5 sm:gap-2">
-                  <FolderOpen className="w-3 h-3 text-amber-500" /> Executive Summary
+                  <FolderOpen className="w-3 h-3 text-amber-500" /> Write Report Summary
                 </label>
                 <textarea
                   rows={5}
@@ -169,7 +169,7 @@ export default function WorkReports() {
                     <Paperclip className="w-4 h-4 sm:w-5 sm:h-5 text-amber-500" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-[9px] sm:text-[10px] font-black text-emerald-400 uppercase tracking-wider sm:tracking-widest">Supporting Evidence</p>
+                    <p className="text-[9px] sm:text-[10px] font-black text-emerald-400 uppercase tracking-wider sm:tracking-widest">Attachments</p>
                     <p className="text-xs sm:text-sm font-bold truncate">
                       {formData.file ? formData.file.name : 'No file attached'}
                     </p>
@@ -191,7 +191,7 @@ export default function WorkReports() {
                 disabled={submitting}
                 className="w-full flex items-center justify-center gap-3 sm:gap-4 bg-amber-500 text-emerald-950 py-4 sm:py-5 rounded-full font-black text-[10px] sm:text-xs uppercase tracking-[0.25em] sm:tracking-[0.3em] shadow-xl sm:shadow-2xl shadow-amber-500/20 hover:translate-y-[-2px] active:scale-95 transition-all disabled:opacity-50"
               >
-                {submitting ? 'Encrypting...' : <><Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Authorize Entry</>}
+                {submitting ? 'Encrypting...' : <><Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Submit Report</>}
               </button>
             </div>
           </motion.div>

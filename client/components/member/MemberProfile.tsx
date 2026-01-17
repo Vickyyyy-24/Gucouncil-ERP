@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
-import { io } from 'socket.io-client'
+import { onSocketEvent } from '@/lib/socket'
 import { apiClient } from '@/lib/api'
 import { 
   User, Mail, Phone, MapPin, Globe, 
@@ -11,10 +11,6 @@ import {
   Edit3, Save, X, Camera, ShieldCheck, 
   Award, Layers, Smartphone, Hash
 } from 'lucide-react'
-
-const socket = io('http://localhost:5005', {
-  transports: ['websocket'],
-})
 
 export default function MemberProfile() {
   const [profile, setProfile] = useState<any>(null)
@@ -66,28 +62,41 @@ export default function MemberProfile() {
         github: data.github || '',
         memberPicture: null,
       })
+      console.log('✅ Member profile loaded successfully')
     } catch (err) {
-      console.error('Failed to load profile', err)
+      console.error('❌ Failed to load profile', err)
       toast.error('Failed to load profile')
     } finally {
       setLoading(false)
     }
   }
 
+  /* ================= FETCH PROFILE ON MOUNT ================= */
   useEffect(() => {
     fetchProfile()
   }, [])
 
+  /* ================= SOCKET LISTENER FOR PROFILE UPDATES ================= */
   useEffect(() => {
-    socket.on('profile_updated', (payload) => {
-      if (payload.councilId === profile?.council_id) {
-        setProfile(payload.profile)
-        setImageError(false)
-        toast.info('Profile synchronized')
+    try {
+      const unsubscribe = onSocketEvent('profile_updated', (payload) => {
+        console.log('📡 profile_updated event received:', payload)
+        if (payload?.councilId === profile?.council_id) {
+          console.log('✅ Member profile updated via socket, refreshing...')
+          setProfile(payload.profile)
+          setImageError(false)
+          toast.info('Profile synchronized')
+        }
+      })
+
+      return () => {
+        console.log('🧹 Cleaning up member profile socket listener')
+        unsubscribe()
       }
-    })
-    return () => { socket.off('profile_updated') }
-  }, [profile])
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
+  }, [profile?.council_id])
 
   const handlePictureChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -98,24 +107,24 @@ export default function MemberProfile() {
   }
 
   const handleSave = async () => {
-  setSaving(true)
-  try {
-    const { memberPicture, ...profileDataWithoutFile } = formData
-    
-    await apiClient.updateProfile(profileDataWithoutFile, memberPicture as File)  // ✅ CORRECT
-    
-    toast.success('Profile updated')
-    setIsEditing(false)
-    setPreview(null)
-    setImageError(false)
-    fetchProfile()
-  } catch {
-    toast.error('Update failed')
-  } finally {
-    setSaving(false)
+    setSaving(true)
+    try {
+      const { memberPicture, ...profileDataWithoutFile } = formData
+      
+      await apiClient.updateProfile(profileDataWithoutFile, memberPicture as File)
+      
+      toast.success('Profile updated')
+      setIsEditing(false)
+      setPreview(null)
+      setImageError(false)
+      fetchProfile()
+    } catch (err) {
+      console.error('❌ Profile update failed:', err)
+      toast.error('Update failed')
+    } finally {
+      setSaving(false)
+    }
   }
-}
-
 
   if (loading) return (
     <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6 lg:py-8 space-y-6 sm:space-y-8 animate-pulse min-h-screen">
@@ -269,7 +278,7 @@ export default function MemberProfile() {
         
         {/* LEFT: PERSONAL INFO */}
         <motion.div variants={itemVars} className="lg:col-span-2 space-y-6 sm:space-8 lg:space-y-10">
-          <section className="bg-white p-6 sm:p-8 lg:p-12 rounded-2xl sm:rounded-3xl lg:rounded-[3.5rem] shadow-sm border border-emerald-50/50">
+          <section className="bg-white p-6 sm:p-8 lg:p-12 rounded-2xl sm:rounded-3xl  shadow-sm border border-emerald-50/50">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 sm:mb-12 lg:mb-16">
               <div className="flex items-center gap-3 sm:gap-4">
                   <div className="w-10 h-10 sm:w-11 sm:h-11 lg:w-12 lg:h-12 bg-emerald-50 rounded-xl sm:rounded-2xl flex items-center justify-center">
@@ -277,7 +286,6 @@ export default function MemberProfile() {
                   </div>
                   <h3 className="text-sm sm:text-base lg:text-lg font-black text-emerald-950 uppercase tracking-[0.15em] sm:tracking-[0.2em]">Council Identity</h3>
               </div>
-              <Award className="text-amber-400 w-6 h-6 sm:w-7 sm:h-7 lg:w-8 lg:h-8 opacity-40" />
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 sm:gap-x-12 lg:gap-x-20 sm:gap-y-10 lg:gap-y-14">
@@ -285,14 +293,14 @@ export default function MemberProfile() {
               <InfoBlock icon={Layers} label="Committee" value={profile?.committee_name} />
               <EditableField
                 icon={Mail}
-                label="Corporate Email"
+                label="Student Email"
                 value={formData.emailId}
                 editing={isEditing}
                 onChange={(v) => setFormData({ ...formData, emailId: v })}
               />
               <EditableField
                 icon={Smartphone}
-                label="Direct Line"
+                label="Contact Number"
                 value={formData.phoneNumber}
                 editing={isEditing}
                 onChange={(v) => setFormData({ ...formData, phoneNumber: v })}
@@ -300,7 +308,7 @@ export default function MemberProfile() {
               <div className="sm:col-span-2">
                 <EditableField
                   icon={MapPin}
-                  label="Office Location"
+                  label="Address"
                   value={formData.address}
                   editing={isEditing}
                   textarea
@@ -313,9 +321,9 @@ export default function MemberProfile() {
 
         {/* RIGHT: CONNECTIVITY */}
         <motion.div variants={itemVars}>
-          <section className="bg-emerald-950 p-6 sm:p-8 lg:p-12 rounded-2xl sm:rounded-3xl lg:rounded-[3.5rem] shadow-xl sm:shadow-2xl shadow-emerald-950/20 lg:sticky lg:top-8">
+          <section className="bg-emerald-950 p-6 sm:p-8 lg:p-12 rounded-2xl sm:rounded-3xl  shadow-xl sm:shadow-2xl shadow-emerald-950/20 lg:sticky lg:top-8">
             <h3 className="text-[10px] sm:text-[11px] font-black text-amber-500 uppercase tracking-[0.3em] sm:tracking-[0.4em] mb-8 sm:mb-10 lg:mb-12 flex items-center gap-2 sm:gap-3">
-              <Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Connectivity
+              <Globe className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> Social Connectivity
             </h3>
             <div className="space-y-8 sm:space-y-10 lg:space-y-12">
               <EditableField icon={Linkedin} label="LinkedIn" value={formData.linkedin} editing={isEditing} dark onChange={(v)=>setFormData({...formData, linkedin:v})}/>

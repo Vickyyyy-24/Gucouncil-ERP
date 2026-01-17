@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
 import { apiClient } from '@/lib/api'
-import { io } from 'socket.io-client'
+import { onSocketEvent } from '@/lib/socket'
 import { 
   Plus, 
   X, 
@@ -39,25 +39,41 @@ export default function LeaveApplications() {
 
   const fetchLeaves = async () => {
     try {
-  const data = await apiClient.getMyLeaves()
-  setLeaves(data)
-    } catch {
+      const data = await apiClient.getMyLeaves()
+      setLeaves(data)
+      console.log('✅ Leaves loaded successfully')
+    } catch (err) {
+      console.error('❌ Failed to fetch leaves:', err)
       toast.error('Failed to access leave registry')
     } finally {
       setLoading(false)
     }
   }
 
+  /* ================= FETCH LEAVES ON MOUNT ================= */
   useEffect(() => {
     fetchLeaves()
-    const socket = io(API)
-    socket.on('leave_update', data => {
-      toast.info(`Registry Update: Leave ${data.type.replace('_', ' ')}`, {
-        style: { backgroundColor: '#022c22', color: '#fbbf24' }
+  }, [])
+
+  /* ================= SOCKET LISTENER FOR LEAVE UPDATES ================= */
+  useEffect(() => {
+    try {
+      const unsubscribe = onSocketEvent('leave_update', (data) => {
+        console.log('📡 leave_update event received:', data)
+        toast.info(`Registry Update: Leave ${data.type.replace('_', ' ')}`, {
+          style: { backgroundColor: '#022c22', color: '#fbbf24' }
+        })
+        console.log('✅ Refreshing leaves list after socket update')
+        fetchLeaves()
       })
-      fetchLeaves()
-    })
-    return () => { socket.disconnect() }
+
+      return () => {
+        console.log('🧹 Cleaning up leave applications socket listener')
+        unsubscribe()
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
   }, [])
 
   const handleSubmit = async () => {
@@ -68,21 +84,21 @@ export default function LeaveApplications() {
 
     setSubmitting(true)
     try {
+      const fd = new FormData()
+      fd.append('title', formData.title)
+      fd.append('content', formData.content)
+      fd.append('leaveFrom', formData.leaveFrom)
+      fd.append('leaveTo', formData.leaveTo)
+      if (formData.file) fd.append('leaveFile', formData.file)
 
-  const fd = new FormData()
-  fd.append('title', formData.title)
-  fd.append('content', formData.content)
-  fd.append('leaveFrom', formData.leaveFrom)
-  fd.append('leaveTo', formData.leaveTo)
-  if (formData.file) fd.append('leaveFile', formData.file)
-
-  await apiClient.applyLeave(fd)
+      await apiClient.applyLeave(fd)
 
       toast.success('Application filed successfully')
       setShowForm(false)
       setFormData({ title: '', content: '', leaveFrom: '', leaveTo: '', file: null })
       fetchLeaves()
-    } catch {
+    } catch (err) {
+      console.error('❌ Leave submission failed:', err)
       toast.error('Submission failed: Protocol error')
     } finally {
       setSubmitting(false)
@@ -92,10 +108,11 @@ export default function LeaveApplications() {
   const cancelLeave = async (id: number) => {
     if (!confirm('Are you sure you want to revoke this application?')) return
     try {
-  await apiClient.delete(`/api/leaves/${id}`)
+      await apiClient.delete(`/api/leaves/${id}`)
       toast.success('Application successfully revoked')
       fetchLeaves()
-    } catch {
+    } catch (err) {
+      console.error('❌ Leave cancellation failed:', err)
       toast.error('Revocation denied')
     }
   }
@@ -108,7 +125,7 @@ export default function LeaveApplications() {
     return { label: 'In Review', color: 'text-amber-700 bg-amber-50 border-amber-200', icon: <Clock size={12} className="sm:w-3.5 sm:h-3.5"/> }
   }
 
-   if (loading) return (
+  if (loading) return (
     <div className="flex flex-col items-center justify-center h-64 sm:h-80 lg:h-96 space-y-4 sm:space-y-6 px-4">
       <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-emerald-900" />
       <p className="text-emerald-900/50 font-black uppercase text-[9px] sm:text-[10px] tracking-[0.25em] sm:tracking-[0.3em] text-center">Accessing Registry...</p>
@@ -122,10 +139,10 @@ export default function LeaveApplications() {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 sm:gap-6 border-b border-emerald-900/10 pb-6 sm:pb-8 lg:pb-10">
         <div className="space-y-1.5 sm:space-y-2">
           <div className="flex items-center gap-1.5 sm:gap-2 text-emerald-800 font-black text-[9px] sm:text-[10px] uppercase tracking-[0.3em] sm:tracking-[0.4em]">
-            <Compass className="w-3 h-3 sm:w-4 sm:h-4" /> Global Time-Off Protocol
+            <Compass className="w-3 h-3 sm:w-4 sm:h-4" />Time-Off Protocol
           </div>
           <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black text-emerald-950 tracking-tighter italic leading-none">
-            Leave <span className="text-amber-500 not-italic">Management</span>
+            Leave <span className="text-amber-500 not-italic">Application</span>
           </h1>
         </div>
         
@@ -138,7 +155,7 @@ export default function LeaveApplications() {
           }`}
         >
           {showForm ? <X size={14} className="sm:w-4 sm:h-4"/> : <Plus size={14} className="sm:w-4 sm:h-4"/>}
-          <span className="hidden sm:inline">{showForm ? 'Abort Filing' : 'Establish New Request'}</span>
+          <span className="hidden sm:inline">{showForm ? 'Abort' : 'New Request'}</span>
           <span className="sm:hidden">{showForm ? 'Cancel' : 'New Request'}</span>
         </button>
       </div>
@@ -154,7 +171,7 @@ export default function LeaveApplications() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8 lg:gap-12">
                 <div className="space-y-2 sm:space-y-3 group md:col-span-2">
                   <label className="text-[9px] sm:text-[10px] font-black text-emerald-900/30 uppercase tracking-wider sm:tracking-widest flex items-center gap-1.5 sm:gap-2 group-focus-within:text-amber-500 transition-colors">
-                    <FileText className="w-2.5 h-2.5 sm:w-3 sm:h-3" /> Application nomenclature
+                    <FileText className="w-2.5 h-2.5 sm:w-3 sm:h-3" /> Application Title
                   </label>
                   <input className="w-full bg-white border-b-2 border-emerald-900/5 px-0 py-2 sm:py-3 text-emerald-950 font-bold outline-none focus:border-amber-500 transition-all placeholder:text-emerald-900/10 text-base sm:text-lg lg:text-xl" 
                     placeholder="Enter the primary reason for absence..."
@@ -164,7 +181,7 @@ export default function LeaveApplications() {
 
                 <div className="space-y-2 sm:space-y-3 group md:col-span-2">
                   <label className="text-[9px] sm:text-[10px] font-black text-emerald-900/30 uppercase tracking-wider sm:tracking-widest flex items-center gap-1.5 sm:gap-2 group-focus-within:text-amber-500 transition-colors">
-                    Executive Justification
+                    Reason for Leave
                   </label>
                   <textarea className="w-full bg-emerald-50/20 border border-emerald-900/5 p-4 sm:p-5 lg:p-6 rounded-xl sm:rounded-2xl lg:rounded-[2rem] outline-none focus:border-amber-500 transition-all text-emerald-950 font-medium resize-none min-h-[120px] sm:min-h-[140px] text-sm sm:text-base" 
                     placeholder="Provide a detailed context for the approval committee..."
@@ -198,7 +215,7 @@ export default function LeaveApplications() {
                         <Paperclip size={18} className="sm:w-5 sm:h-5" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[9px] sm:text-[10px] font-black text-emerald-400 uppercase tracking-wider sm:tracking-widest leading-none">Attachment Log</p>
+                        <p className="text-[9px] sm:text-[10px] font-black text-emerald-400 uppercase tracking-wider sm:tracking-widest leading-none">Attachments</p>
                         <p className="text-xs sm:text-sm font-bold mt-1 truncate">{formData.file ? formData.file.name : 'No file detected'}</p>
                       </div>
                     </div>
@@ -216,7 +233,7 @@ export default function LeaveApplications() {
                 disabled={submitting} 
                 className="w-full bg-emerald-900 text-amber-500 py-4 sm:py-5 lg:py-6 rounded-full font-black text-[10px] sm:text-xs uppercase tracking-[0.3em] sm:tracking-[0.4em] hover:bg-emerald-800 disabled:opacity-50 transition-all shadow-xl sm:shadow-2xl shadow-emerald-900/20"
               >
-                {submitting ? 'Encrypting Request...' : 'Authorize Submission'}
+                {submitting ? 'Submitting Request...' : 'Confirm Submission'}
               </button>
             </div>
           </motion.div>
@@ -235,7 +252,7 @@ export default function LeaveApplications() {
         {leaves.length === 0 ? (
           <div className="text-center py-20 sm:py-24 lg:py-32 bg-white rounded-2xl sm:rounded-3xl lg:rounded-[4rem] border border-emerald-900/5 shadow-sm flex flex-col items-center px-4">
             <Calendar className="text-emerald-900/5 w-14 h-14 sm:w-16 sm:h-16 lg:w-20 lg:h-20 mb-3 sm:mb-4" />
-            <p className="text-emerald-900/20 font-black uppercase text-[10px] sm:text-xs tracking-wider sm:tracking-widest">No existing applications in registry</p>
+            <p className="text-emerald-900/20 font-black uppercase text-[10px] sm:text-xs tracking-wider sm:tracking-widest">No existing applications</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-6 sm:gap-8 lg:gap-10">

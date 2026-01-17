@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-
   images: {
     remotePatterns: [
       {
@@ -20,10 +19,8 @@ const nextConfig = {
       'http://localhost:5005',
   },
 
-  turbopack: {
-    root: __dirname,
-  },
-  
+turbopack: {
+    root: __dirname, // explicitly set root to project directory
+  }, 
 }
-
 module.exports = nextConfig

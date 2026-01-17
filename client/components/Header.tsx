@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { io } from 'socket.io-client'
+import { onSocketEvent } from '@/lib/socket'
 import { 
   ShieldCheck, 
   User, 
@@ -30,16 +30,15 @@ interface HeaderProps {
   onLogout?: () => void
 }
 
-// Real NotificationBell component with Socket.io
+// Real NotificationBell component with centralized Socket.io
 function NotificationBell() {
   const [count, setCount] = useState(0)
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState<any[]>([])
 
   useEffect(() => {
-    const socket = io('http://localhost:5005')
-
-    socket.on('leave_update', (payload) => {
+    // Use centralized socket from your lib/socket.ts
+    const unsubscribeLeave = onSocketEvent('leave_update', (payload) => {
       setCount((c) => c + 1)
       setNotifications((prev) => [
         {
@@ -51,7 +50,7 @@ function NotificationBell() {
       ])
     })
 
-    socket.on('attendance:update', (payload) => {
+    const unsubscribeAttendance = onSocketEvent('attendance:update', (payload) => {
       setCount((c) => c + 1)
       setNotifications((prev) => [
         {
@@ -63,7 +62,11 @@ function NotificationBell() {
       ])
     })
 
-    return () => socket.disconnect()
+    // Cleanup subscriptions on unmount
+    return () => {
+      unsubscribeLeave()
+      unsubscribeAttendance()
+    }
   }, [])
 
   const toggle = () => {

@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { toast } from 'react-toastify'
-import { io } from 'socket.io-client'
+import { onSocketEvent } from '@/lib/socket'
 import { apiClient } from '@/lib/api'
 import html2canvas from 'html2canvas'
 import {
@@ -33,7 +33,6 @@ import {
 
 ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend, LineElement, PointElement, Filler)
 
-const API = 'http://localhost:5005'
 type Range = 'weekly' | 'monthly'
 
 export default function CommitteeInsights() {
@@ -48,18 +47,35 @@ export default function CommitteeInsights() {
   const [loading, setLoading] = useState(true)
   const [range, setRange] = useState<Range>('weekly')
 
+  /* ================= SOCKET LISTENER FOR LEAVE UPDATES ================= */
   useEffect(() => {
-    const socket = io(API)
-    socket.on('leave_update', () => fetchInsights())
-    return () => { socket.disconnect() }
+    try {
+      const unsubscribe = onSocketEvent('leave_update', () => {
+        console.log('📡 leave_update event received')
+        fetchInsights()
+      })
+
+      return () => {
+        console.log('🧹 Cleaning up committee insights socket listener')
+        unsubscribe()
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
+    }
   }, [range])
 
-  useEffect(() => { fetchAll() }, [range])
+  /* ================= FETCH DATA WHEN RANGE CHANGES ================= */
+  useEffect(() => {
+    fetchAll()
+  }, [range])
 
   const fetchAll = async () => {
     setLoading(true)
-    await Promise.all([fetchInsights(), fetchMembers()])
-    setLoading(false)
+    try {
+      await Promise.all([fetchInsights(), fetchMembers()])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const fetchInsights = async () => {
@@ -72,8 +88,9 @@ export default function CommitteeInsights() {
         pendingLeaves: Array.isArray(data?.pendingLeaves) ? data.pendingLeaves : [],
         attendanceTrend: Array.isArray(data?.attendanceTrend) ? data.attendanceTrend : [],
       })
+      console.log('✅ Committee insights loaded successfully')
     } catch (err) {
-      console.error('Failed to fetch insights', err)
+      console.error('❌ Failed to fetch insights', err)
       toast.error('Failed to fetch insights')
     }
   }
@@ -82,8 +99,9 @@ export default function CommitteeInsights() {
     try {
       const data = await apiClient.get('/api/head/committee-members')
       setMembers(Array.isArray(data) ? data : [])
+      console.log('✅ Committee members loaded successfully')
     } catch (err) {
-      console.error('Failed to fetch members', err)
+      console.error('❌ Failed to fetch members', err)
       toast.error('Failed to fetch members')
     }
   }
@@ -106,8 +124,10 @@ export default function CommitteeInsights() {
       a.href = url
       a.download = `Committee_Insights_${new Date().toLocaleDateString()}.pdf`
       a.click()
+      window.URL.revokeObjectURL(url)
       toast.success('Report exported successfully')
-    } catch {
+    } catch (err) {
+      console.error('❌ Export failed:', err)
       toast.error('Export failed')
     }
   }
@@ -191,13 +211,15 @@ export default function CommitteeInsights() {
               transition={{ delay: 0.1 }}
               className="text-2xl sm:text-3xl lg:text-4xl font-bold text-white mb-1 sm:mb-2"
             >
-              Committee Insights
+              <span className="text-4xl md:text-5xl font-black tracking-tight text-white italic uppercase">
+                COMMITTEE <span className="text-orange-500 not-italic">INSIGHT</span>
+              </span>
             </motion.h1>
             <motion.p 
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.2 }}
-              className="text-xs sm:text-sm text-gray-400"
+              className="flex items-center gap-2 text-orange-500 font-bold text-xs sm:text-sm uppercase tracking-wide"
             >
               Monitor attendance, reports, and team performance
             </motion.p>

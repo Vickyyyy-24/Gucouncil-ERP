@@ -58,7 +58,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
             <motion.div
               initial={{ opacity: 0, width: 0 }}
               animate={{ opacity: 1, width: 'auto' }}
-              exit={{ opacity: 0, width: 0 }}
+              exit={{ opacity: 0, width: 0 }}   
               className="overflow-hidden"
             >
               <p className="text-[30px] font-bold text-gray-400 uppercase leading-none mt-1">
@@ -77,7 +77,7 @@ export default function Sidebar({ tabs, activeTab, onTabChange, userRole, onLogo
             <motion.button
               key={tab.id}
               initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
+              animate={{ opacity: 1, x: 0 }} 
               transition={{ delay: index * 0.05 }}
               onClick={() => {
                 onTabChange(tab.id)

@@ -12,7 +12,21 @@ const generateCommitteePdf = require('./utils/generateCommitteePdf')
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
-
+// ============================================
+// SYSTEM LOGGING UTILITY
+// ============================================
+const createSystemLog = async (pool, userId, role, action, entityType, entityId, description, severity = 'INFO') => {
+  try {
+    await pool.query(
+      `INSERT INTO system_logs
+       (actor_user_id, actor_role, action, entity_type, entity_id, description, severity)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [userId, role, action, entityType, entityId, description, severity]
+    );
+  } catch (error) {
+    console.error('System log creation error:', error);
+  }
+};
 
 // Import database models
 const { pool, initDB, User, UserProfile, Attendance, WorkReport, LeaveApplication, BiometricRegistration, LoginLog } = require('./models');
@@ -30,7 +44,9 @@ initDB();
 // Security & middleware
 
 app.set('trust proxy', 1);
-
+const FRONTEND_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+const BACKEND_URL = process.env.BASE_URL || 'http://localhost:5005';
+const ELECTRON_APP_URL = process.env.ELECTRON_APP_URL || 'http://localhost:3010';
 // Helmet with strict CSP
 app.use(
   helmet({
@@ -41,7 +57,7 @@ app.use(
         fontSrc: ["'self'", "https:", "data:"],
         formAction: ["'self'"],
         frameAncestors: ["'self'"],
-        imgSrc: ["'self'", CLIENT_URL, "data:"],
+        imgSrc: ["'self'", FRONTEND_URL, BACKEND_URL, "data:"],
         objectSrc: ["'none'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "https:", "'unsafe-inline'"],
@@ -49,15 +65,14 @@ app.use(
       },
     },
     referrerPolicy: { policy: "no-referrer" },
-    crossOriginResourcePolicy: { policy: "same-origin" },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
     crossOriginOpenerPolicy: { policy: "same-origin" },
-    hsts: { maxAge: 31536000, includeSubDomains: true }, // 1 year HTTPS enforcement
+    hsts: { maxAge: 31536000, includeSubDomains: true },
   })
 );
-
 // CORS
 app.use(cors({
-  origin: CLIENT_URL,
+  origin:  [CLIENT_URL, ELECTRON_APP_URL], 
   credentials: true,
 }));
 
@@ -67,7 +82,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Rate limiting (auth endpoints)
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
@@ -75,7 +90,17 @@ const authLimiter = rateLimit({
 app.use('/auth', authLimiter);
 
 // Static file serving
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+     maxAge: '1d',
+     etag: false
+   }));
+
+app.use('/uploads', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', CLIENT_URL);
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
 
 // Storage configuration
 const storage = multer.diskStorage({
@@ -121,7 +146,6 @@ const authenticateToken = async (req, res, next) => {
 }
 }
 
-
 // Role-based authorization middleware
 const authorizeRole = (...roles) => {
   return (req, res, next) => {
@@ -139,27 +163,27 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { councilId, password } = req.body;
     
-    // Find user
     const user = await User.findByCouncilId(councilId);
     if (!user || !user.is_active) {
+      await createSystemLog(pool, null, 'guest', 'LOGIN_FAILED', 'USER', null, `Failed login attempt for council ID: ${councilId}`, 'WARNING');
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Verify password using bcrypt
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
+      await createSystemLog(pool, user.id, user.role, 'LOGIN_FAILED', 'USER', user.id, `Failed login attempt (wrong password)`, 'WARNING');
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
-    // Generate JWT token
     const token = jwt.sign(
       { userId: user.id, councilId: user.council_id, role: user.role },
       process.env.JWT_SECRET || 'your-secret-key',
       { expiresIn: process.env.JWT_EXPIRES || '24h' }
     );
 
-    // Log login
     await LoginLog.create(user.id, req.ip, req.get('User-Agent'));
+
+    await createSystemLog(pool, user.id, user.role, 'LOGIN', 'USER', user.id, `User logged in from IP: ${req.ip}`, 'INFO');
 
     res.json({
       token,
@@ -180,19 +204,19 @@ app.post('/api/admin/create-user', authenticateToken, authorizeRole('admin'), as
   try {
     const { councilId, password, role } = req.body;
     
-    // Check if user already exists
     const existingUser = await User.findByCouncilId(councilId);
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
 
-    // Hash password before saving
     const hashedPassword = await bcrypt.hash(password, 10);
     const newUser = await User.create({
       council_id: councilId,
       password: hashedPassword,
       role: role
     });
+    
+    await createSystemLog(pool, req.user.userId, req.user.role, 'CREATE', 'USER', newUser.id, `Created user: ${councilId} with role: ${role}`, 'INFO');
     
     res.json({ message: 'User created successfully', user: newUser });
   } catch (error) {
@@ -232,14 +256,19 @@ app.post('/api/admin/bulk-create-users', authenticateToken, authorizeRole('admin
             password: password,
             role: role
           });
+
+          await createSystemLog(pool, req.user.userId, req.user.role, 'CREATE', 'USER', newUser.id, `Bulk created user: ${councilId} with role: ${role}`, 'INFO');
           
           results.push(newUser);
         } catch (err) {
           errors.push(`Error processing row: ${err.message}`);
         }
       })
-      .on('end', () => {
-        fs.unlinkSync(req.file.path); // Clean up uploaded file
+      .on('end', async () => {
+        fs.unlinkSync(req.file.path);
+        
+        await createSystemLog(pool, req.user.userId, req.user.role, 'BULK_CREATE', 'USER', null, `Bulk created ${results.length} users from CSV file (${errors.length} errors)`, 'INFO');
+        
         res.json({
           message: 'Bulk user creation completed',
           created: results.length,
@@ -254,13 +283,11 @@ app.post('/api/admin/bulk-create-users', authenticateToken, authorizeRole('admin
 
 app.get('/api/admin/user-stats', authenticateToken, authorizeRole('admin'), async (req, res) => {
   try {
-    // 1️⃣ Total active users
     const totalUsersRes = await pool.query(
       `SELECT COUNT(*) FROM users WHERE is_active = true`
     )
     const totalUsers = parseInt(totalUsersRes.rows[0].count)
 
-    // 2️⃣ Active today (login based)
     const activeTodayRes = await pool.query(`
       SELECT COUNT(DISTINCT user_id)
       FROM login_logs
@@ -268,72 +295,72 @@ app.get('/api/admin/user-stats', authenticateToken, authorizeRole('admin'), asyn
     `)
     const activeToday = parseInt(activeTodayRes.rows[0].count)
 
-    // 3️⃣ Attendance per committee (today)
-const attendanceCommitteeRes = await pool.query(`
-  SELECT up.committee_name, COUNT(DISTINCT al.user_id) AS count
-  FROM attendance_logs al
-  JOIN users u ON u.id = al.user_id
-  JOIN user_profiles up ON up.council_id = u.council_id
-  WHERE al.punch_in::date = CURRENT_DATE
-  GROUP BY up.committee_name
-`);
+    const attendanceCommitteeRes = await pool.query(`
+      SELECT 
+        COALESCE(up.committee_name, 'Unassigned') AS committee_name, 
+        COUNT(DISTINCT up.council_id) AS count
+      FROM user_profiles up
+      WHERE up.committee_name IS NOT NULL AND TRIM(up.committee_name) != ''
+      GROUP BY up.committee_name
+      ORDER BY committee_name
+    `);
 
     const committeeStats = {}
     attendanceCommitteeRes.rows.forEach(row => {
       committeeStats[row.committee_name] = parseInt(row.count)
     })
 
-    // 4️⃣ Total committees
     const committeesRes = await pool.query(`
       SELECT COUNT(DISTINCT committee_name) FROM user_profiles
+      WHERE committee_name IS NOT NULL AND TRIM(committee_name) != ''
     `)
     const totalCommittees = parseInt(committeesRes.rows[0].count)
 
-    // 5️⃣ Attendance rate (overall)
     const attendanceRate =
       totalUsers === 0 ? 0 : Math.round((activeToday / totalUsers) * 100)
 
-    // 6️⃣ Daily attendance trend (last 7 days)
     const trendRes = await pool.query(`
       SELECT DATE(punch_in) AS day, COUNT(DISTINCT user_id) AS count
       FROM attendance_logs
+      WHERE punch_in::date >= CURRENT_DATE - INTERVAL '30 days'
       GROUP BY day
-      ORDER BY day DESC
-      LIMIT 7
+      ORDER BY day ASC
     `)
 
-    // 7️⃣ Recent activity (first 10)
-const activityRes = await pool.query(`
-  SELECT 'login' AS type, ll.login_time AS time, up.name, up.committee_name
-  FROM login_logs ll
-  JOIN users u ON u.id = ll.user_id
-  JOIN user_profiles up ON up.council_id = u.council_id
+    const activityRes = await pool.query(`
+      SELECT 'login' AS type, ll.login_time AS time, up.name, up.committee_name
+      FROM login_logs ll
+      JOIN users u ON u.id = ll.user_id
+      JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE ll.login_time >= NOW() - INTERVAL '24 hours'
 
-  UNION ALL
+      UNION ALL
 
-  SELECT 'attendance', al.created_at, up.name, up.committee_name
-  FROM attendance_logs al
-  JOIN users u ON u.id = al.user_id
-  JOIN user_profiles up ON up.council_id = u.council_id
+      SELECT 'attendance', al.created_at, up.name, up.committee_name
+      FROM attendance_logs al
+      JOIN users u ON u.id = al.user_id
+      JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE al.created_at >= NOW() - INTERVAL '24 hours'
 
-  UNION ALL
+      UNION ALL
 
-  SELECT 'report', r.created_at, up.name, up.committee_name
-  FROM work_reports r
-  JOIN users u ON u.id = r.user_id
-  JOIN user_profiles up ON up.council_id = u.council_id
+      SELECT 'report', r.created_at, up.name, up.committee_name
+      FROM work_reports r
+      JOIN users u ON u.id = r.user_id
+      JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE r.created_at >= NOW() - INTERVAL '24 hours'
 
-  UNION ALL
+      UNION ALL
 
-  SELECT 'leave', l.created_at, up.name, up.committee_name
-  FROM leave_applications l
-  JOIN users u ON u.id = l.user_id
-  JOIN user_profiles up ON up.council_id = u.council_id
+      SELECT 'leave', l.created_at, up.name, up.committee_name
+      FROM leave_applications l
+      JOIN users u ON u.id = l.user_id
+      JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE l.created_at >= NOW() - INTERVAL '24 hours'
 
-  ORDER BY time DESC
-  LIMIT 10
-`);
-
+      ORDER BY time DESC
+      LIMIT 10
+    `)
 
     const recentActivity = activityRes.rows.map(row => ({
       message: `${row.type.toUpperCase()}: ${row.name} (${row.committee_name})`,
@@ -354,15 +381,14 @@ const activityRes = await pool.query(`
       totalCommittees,
       attendanceRate,
       committeeStats,
-      dailyTrend: trendRes.rows.reverse(),
+      dailyTrend: trendRes.rows,
       recentActivity
     })
   } catch (error) {
     console.error('User stats error:', error)
-    res.status(500).json({ message: 'Server error' })
+    res.status(500).json({ message: 'Server error', error: error.message })
   }
 })
-
 
 // User Profile Routes
 app.post('/api/profiles/create', authenticateToken, authorizeRole('admin'), upload.single('memberPicture'), async (req, res) => {
@@ -374,17 +400,15 @@ app.post('/api/profiles/create', authenticateToken, authorizeRole('admin'), uplo
       return res.status(404).json({ message: 'User not found' });
     }
 
- const existingProfile = await UserProfile.findByCouncilId(user.council_id);
+    const existingProfile = await UserProfile.findByCouncilId(user.council_id);
 
-if (existingProfile) {
-  return res.status(400).json({ message: 'Profile already exists' });
-}
+    if (existingProfile) {
+      return res.status(400).json({ message: 'Profile already exists' });
+    }
 
     const newProfile = await UserProfile.create({
       council_id: user.council_id,
-      member_picture: req.file
-  ? `/uploads/user-pfp/${req.file.filename}`
-  : null,
+      member_picture: req.file ? `/uploads/user-pfp/${req.file.filename}` : null,
       name: profileData.name,
       enrollment_number: profileData.enrollmentNumber,
       committee_name: profileData.committeeName,
@@ -398,6 +422,8 @@ if (existingProfile) {
       snapchat: profileData.snapchat,
       github: profileData.github
     });
+
+    await createSystemLog(pool, req.user.userId, req.user.role, 'CREATE', 'PROFILE', newProfile.id, `Created profile: ${profileData.name} (${profileData.councilId}) - Committee: ${profileData.committeeName} - Position: ${profileData.position}`, 'INFO');
 
     res.json({ message: 'Profile created successfully', profile: newProfile });
   } catch (error) {
@@ -414,7 +440,6 @@ app.put(
     try {
       const profileData = req.body;
 
-      // 🔑 Determine councilId
       const councilId =
         req.user.role === 'admin'
           ? profileData.councilId
@@ -424,16 +449,12 @@ app.put(
         return res.status(400).json({ message: 'Council ID missing' });
       }
 
-      // 🔍 Fetch existing profile
       const profile = await UserProfile.findByCouncilId(councilId);
 
       if (!profile) {
         return res.status(404).json({ message: 'Profile not found' });
       }
 
-      /* ======================================
-         🧹 DELETE OLD IMAGE (IF NEW UPLOADED)
-      ====================================== */
       if (req.file && profile.member_picture) {
         const oldImagePath = path.join(
           __dirname,
@@ -445,63 +466,50 @@ app.put(
         }
       }
 
-      /* ======================================
-         📝 BUILD UPDATE DATA
-      ====================================== */
       const updateData = {};
+      const changes = [];
 
-      // ❗ USER CAN UPDATE ONLY THESE
       if (req.user.role !== 'admin') {
-        if (profileData.name) updateData.name = profileData.name;
-        if (profileData.phoneNumber)
-          updateData.phone_number = profileData.phoneNumber;
-        if (profileData.emailId)
-          updateData.email_id = profileData.emailId;
-        if (profileData.address)
-          updateData.address = profileData.address;
-        if (profileData.instagram)
-          updateData.instagram = profileData.instagram;
-        if (profileData.discord)
-          updateData.discord = profileData.discord;
-        if (profileData.linkedin)
-          updateData.linkedin = profileData.linkedin;
-        if (profileData.snapchat)
-          updateData.snapchat = profileData.snapchat;
-        if (profileData.github)
-          updateData.github = profileData.github;
+        if (profileData.name) { updateData.name = profileData.name; changes.push('name'); }
+        if (profileData.phoneNumber) { updateData.phone_number = profileData.phoneNumber; changes.push('phone_number'); }
+        if (profileData.emailId) { updateData.email_id = profileData.emailId; changes.push('email_id'); }
+        if (profileData.address) { updateData.address = profileData.address; changes.push('address'); }
+        if (profileData.instagram) { updateData.instagram = profileData.instagram; changes.push('instagram'); }
+        if (profileData.discord) { updateData.discord = profileData.discord; changes.push('discord'); }
+        if (profileData.linkedin) { updateData.linkedin = profileData.linkedin; changes.push('linkedin'); }
+        if (profileData.snapchat) { updateData.snapchat = profileData.snapchat; changes.push('snapchat'); }
+        if (profileData.github) { updateData.github = profileData.github; changes.push('github'); }
 
-        // 🖼️ New image
         if (req.file) {
           updateData.member_picture = `/uploads/user-pfp/${req.file.filename}`;
+          changes.push('member_picture');
         }
       } 
-      // ❗ ADMIN CAN UPDATE EVERYTHING
       else {
         Object.entries(profileData).forEach(([key, value]) => {
-          if (value !== undefined) updateData[key] = value;
+          if (value !== undefined && key !== 'councilId') {
+            updateData[key] = value;
+            changes.push(key);
+          }
         });
 
         if (req.file) {
           updateData.member_picture = `/uploads/user-pfp/${req.file.filename}`;
+          changes.push('member_picture');
         }
       }
 
-      // 🚫 PROTECTED FIELDS (NEVER UPDATE)
       delete updateData.council_id;
       delete updateData.committee_name;
       delete updateData.position;
 
-      /* ======================================
-         💾 UPDATE DB
-      ====================================== */
       const updatedProfile = await UserProfile.updateByCouncilId(
         councilId,
         updateData
       );
 
-      /* ======================================
-         🌐 FIX IMAGE URL FOR FRONTEND
-      ====================================== */
+      await createSystemLog(pool, req.user.userId, req.user.role, 'UPDATE', 'PROFILE', updatedProfile.id, `Updated profile for ${councilId}. Changed fields: ${changes.join(', ')}`, 'INFO');
+
       if (updatedProfile.member_picture) {
         const BASE_URL =
           process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -550,6 +558,8 @@ app.post('/api/attendance/punch-in', authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.userId);
     const profile = await UserProfile.findByCouncilId(user.council_id);
 
+    await createSystemLog(pool, req.user.userId, req.user.role, 'PUNCH_IN', 'ATTENDANCE', attendance.id, `Punched in - ${profile?.name || 'Unknown'} (${profile?.committee_name || 'No Committee'})`, 'INFO');
+
     emitAttendanceUpdate({
       type: 'punch_in',
       userId: user.id,
@@ -576,6 +586,8 @@ app.post('/api/attendance/punch-out', authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.userId);
     const profile = await UserProfile.findByCouncilId(user.council_id);
 
+    await createSystemLog(pool, req.user.userId, req.user.role, 'PUNCH_OUT', 'ATTENDANCE', attendance.id, `Punched out - ${profile?.name || 'Unknown'} (${profile?.committee_name || 'No Committee'})`, 'INFO');
+
     emitAttendanceUpdate({
       type: 'punch_out',
       userId: user.id,
@@ -592,12 +604,6 @@ app.post('/api/attendance/punch-out', authenticateToken, async (req, res) => {
     res.status(400).json({ message: error.message || 'Failed to punch out' });
   }
 });
-
-
-
- 
-
-
 
 app.get('/api/attendance/my-attendance', authenticateToken, async (req, res) => {
   try {
@@ -624,14 +630,16 @@ app.post('/api/reports/submit', authenticateToken, upload.single('reportFile'), 
         : null
     });
 
+    const profile = await UserProfile.findByCouncilId(req.user.councilId);
+
+    await createSystemLog(pool, req.user.userId, req.user.role, 'SUBMIT', 'REPORT', newReport.id, `Submitted report: "${title}" - ${profile?.name || 'Unknown'} (${profile?.committee_name || 'No Committee'}) - Date: ${reportDate}`, 'INFO');
+
     res.json({ message: 'Report submitted successfully', report: newReport });
   } catch (error) {
     console.error('Submit report error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
-
-
 
 app.get('/api/reports/my-reports', authenticateToken, async (req, res) => {
   try {
@@ -651,8 +659,6 @@ app.get('/api/reports/my-reports', authenticateToken, async (req, res) => {
   }
 })
 
-
-
 // Leave Application Routes
 const { emitLeaveUpdate } = require('./socket')
 
@@ -664,9 +670,6 @@ app.post(
     try {
       const { title, content, leaveFrom, leaveTo } = req.body
 
-      /* ===============================
-         1️⃣ CREATE LEAVE
-      =============================== */
       const newLeave = await LeaveApplication.create({
         user_id: req.user.userId,
         title,
@@ -678,9 +681,6 @@ app.post(
           : null
       })
 
-      /* ===============================
-         2️⃣ FETCH PROFILE (FIX)
-      =============================== */
       const profile = await UserProfile.findByCouncilId(req.user.councilId)
 
       if (!profile || !profile.committee_name) {
@@ -689,9 +689,8 @@ app.post(
         })
       }
 
-      /* ===============================
-         3️⃣ EMIT SOCKET EVENT (FIXED)
-      =============================== */
+      await createSystemLog(pool, req.user.userId, req.user.role, 'APPLY', 'LEAVE', newLeave.id, `Applied for leave: "${title}" - ${profile.name} (${profile.committee_name}) - From: ${leaveFrom} To: ${leaveTo}`, 'INFO');
+
       emitLeaveUpdate({
         type: 'new_leave',
         committee: profile.committee_name,
@@ -711,9 +710,6 @@ app.post(
   }
 )
 
-
-
-
 app.get('/api/leaves/my-leaves', authenticateToken, async (req, res) => {
   try {
     const leaves = await LeaveApplication.findByUserId(req.user.userId)
@@ -731,35 +727,45 @@ app.get('/api/leaves/my-leaves', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Server error' })
   }
 })
+
 app.delete('/api/leaves/:id', authenticateToken, async (req, res) => {
-  const leave = await LeaveApplication.findById(req.params.id)
+  try {
+    const leave = await LeaveApplication.findById(req.params.id)
 
-  if (!leave || leave.user_id !== req.user.userId) {
-    return res.status(403).json({ message: 'Unauthorized' })
+    if (!leave || leave.user_id !== req.user.userId) {
+      return res.status(403).json({ message: 'Unauthorized' })
+    }
+
+    if (leave.gs_approval) {
+      return res.status(400).json({ message: 'Cannot cancel approved leave' })
+    }
+
+    if (leave.file_path) {
+      const filePath = path.join(__dirname, leave.file_path)
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    }
+
+    const profile = await UserProfile.findByCouncilId(req.user.councilId);
+
+    await createSystemLog(pool, req.user.userId, req.user.role, 'CANCEL', 'LEAVE', leave.id, `Cancelled leave: "${leave.title}" by ${profile?.name || 'Unknown'} (${profile?.committee_name || 'No Committee'})`, 'INFO');
+
+    await LeaveApplication.delete(req.params.id)
+
+    res.json({ message: 'Leave cancelled successfully' })
+  } catch (error) {
+    console.error('Delete leave error:', error);
+    res.status(500).json({ message: 'Failed to cancel leave' });
   }
-
-  if (leave.gs_approval) {
-    return res.status(400).json({ message: 'Cannot cancel approved leave' })
-  }
-
-  /* 🧹 delete file */
-  if (leave.file_path) {
-    const filePath = path.join(__dirname, leave.file_path)
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-  }
-
-  await LeaveApplication.delete(req.params.id)
-
-  res.json({ message: 'Leave cancelled successfully' })
 })
 
+// ============================================
+// COMMITTEE HEAD ROUTES (continues from profiles)
+// ============================================
 
-
-// Committee Head Routes
 app.get(
   '/api/head/committee-insights',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
     try {
       const range = req.query.range === 'monthly' ? 'monthly' : 'weekly'
@@ -771,17 +777,11 @@ app.get(
 
       const committee = headProfile.committee_name
 
-      /* ===========================
-         DATE RANGE
-      =========================== */
       const interval =
         range === 'monthly'
           ? "CURRENT_DATE - INTERVAL '30 days'"
           : "CURRENT_DATE - INTERVAL '7 days'"
 
-      /* ===========================
-         SUMMARY STATS
-      =========================== */
       const statsRes = await pool.query(
         `
         SELECT
@@ -801,9 +801,6 @@ app.get(
         [committee]
       )
 
-      /* ===========================
-         ATTENDANCE RATE
-      =========================== */
       const rateRes = await pool.query(
         `
         SELECT
@@ -819,9 +816,6 @@ app.get(
         [committee]
       )
 
-      /* ===========================
-         ATTENDANCE TREND (FOR CHART)
-      =========================== */
       const trendRes = await pool.query(
         `
         SELECT
@@ -839,9 +833,6 @@ app.get(
         [committee]
       )
 
-      /* ===========================
-         PENDING LEAVES
-      =========================== */
       const leavesRes = await pool.query(
         `
         SELECT
@@ -885,7 +876,7 @@ app.get(
 app.post(
   '/api/head/committee-export/pdf',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
     try {
       const { chartImage } = req.body
@@ -924,10 +915,11 @@ app.post(
     }
   }
 )
+
 app.get(
   '/api/head/committee-members',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
     try {
       const headProfile = await UserProfile.findByCouncilId(req.user.councilId)
@@ -966,27 +958,41 @@ app.get(
   }
 )
 
-app.put('/api/head/approve-leave/:leaveId',
+app.post(
+  '/api/head/approve-leave/:id',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
+    try {
+      const leave = await LeaveApplication.findById(req.params.id);
+      if (!leave) {
+        return res.status(404).json({ message: 'Leave not found' });
+      }
 
-    const updatedLeave = await LeaveApplication.updateHeadApproval(req.params.leaveId)
+      const updatedLeave = await LeaveApplication.updateHeadApproval(req.params.id)
+      const applicant = await UserProfile.findByCouncilId((await User.findById(leave.user_id)).council_id);
 
-    emitLeaveUpdate({
-      type: 'approved_by_head',
-      leaveId: updatedLeave.id,
-      userId: updatedLeave.user_id,
-      timestamp: new Date().toISOString()
-    })
+      await createSystemLog(pool, req.user.userId, req.user.role, 'APPROVE', 'LEAVE', leave.id, `Approved leave: "${leave.title}" by ${applicant?.name || 'Unknown'} (${applicant?.committee_name || 'No Committee'})`, 'INFO');
 
-    res.json({ message: 'Approved by head', leave: updatedLeave })
-})
+      emitLeaveUpdate({
+        type: 'approved_by_head',
+        leaveId: updatedLeave.id,
+        userId: updatedLeave.user_id,
+        timestamp: new Date().toISOString()
+      })
+
+      res.json({ message: 'Approved by head', leave: updatedLeave })
+    } catch (error) {
+      console.error('Approve leave error:', error)
+      res.status(500).json({ message: 'Failed to approve leave' })
+    }
+  }
+)
 
 app.get(
   '/api/head/committee/leaves',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
     try {
       const profile = await UserProfile.findByCouncilId(req.user.councilId)
@@ -1029,85 +1035,50 @@ app.get(
   }
 )
 
-app.get(
-  '/api/head/committee/leaves',
-  authenticateToken,
-  authorizeRole('committee_head'),
-  async (req, res) => {
-    try {
-      const profile = await UserProfile.findByCouncilId(req.user.councilId)
-      if (!profile?.committee_name) {
-        return res.status(400).json({ message: 'Committee not assigned' })
-      }
-
-      const result = await pool.query(`
-        SELECT
-          la.id,
-          la.title,
-          la.content,
-          la.leave_from,
-          la.leave_to,
-          la.head_approval,
-          la.gs_approval,
-          la.file_path,
-          la.created_at,
-          up.name,
-          up.council_id
-        FROM leave_applications la
-        JOIN users u ON u.id = la.user_id
-        JOIN user_profiles up ON up.council_id = u.council_id
-        WHERE up.committee_name = $1
-        ORDER BY la.created_at DESC
-      `, [profile.committee_name])
-
-      const BASE_URL = process.env.BASE_URL || 'http://localhost:5005'
-
-      res.json(
-        result.rows.map(l => ({
-          ...l,
-          file_path: l.file_path ? `${BASE_URL}${l.file_path}` : null
-        }))
-      )
-    } catch (err) {
-      console.error(err)
-      res.status(500).json({ message: 'Failed to fetch leaves' })
-    }
-  }
-)
-app.put(
+app.post(
   '/api/head/reject-leave/:leaveId',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
-    const { reason } = req.body
-    if (!reason) {
-      return res.status(400).json({ message: 'Rejection reason required' })
+    try {
+      const { reason } = req.body
+      if (!reason) {
+        return res.status(400).json({ message: 'Rejection reason required' })
+      }
+
+      const leave = await LeaveApplication.findById(req.params.leaveId)
+      if (!leave || leave.gs_approval) {
+        return res.status(400).json({ message: 'Cannot reject this leave' })
+      }
+
+      const applicant = await UserProfile.findByCouncilId((await User.findById(leave.user_id)).council_id);
+
+      await pool.query(`
+        UPDATE leave_applications
+        SET head_approval = false
+        WHERE id = $1
+      `, [req.params.leaveId])
+
+      await createSystemLog(pool, req.user.userId, req.user.role, 'REJECT', 'LEAVE', leave.id, `Rejected leave: "${leave.title}" by ${applicant?.name || 'Unknown'} - Reason: ${reason}`, 'WARNING');
+
+      emitLeaveUpdate({
+        type: 'rejected_by_head',
+        leaveId: leave.id,
+        reason
+      })
+
+      res.json({ message: 'Leave rejected' })
+    } catch (error) {
+      console.error('Reject leave error:', error)
+      res.status(500).json({ message: 'Failed to reject leave' })
     }
-
-    const leave = await LeaveApplication.findById(req.params.leaveId)
-    if (!leave || leave.gs_approval) {
-      return res.status(400).json({ message: 'Cannot reject this leave' })
-    }
-
-    await pool.query(`
-      UPDATE leave_applications
-      SET head_approval = false
-      WHERE id = $1
-    `, [req.params.leaveId])
-
-    emitLeaveUpdate({
-      type: 'rejected_by_head',
-      leaveId: leave.id,
-      reason
-    })
-
-    res.json({ message: 'Leave rejected' })
   }
 )
+
 app.get(
   '/api/head/committee/reports',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
     try {
       const profile = await UserProfile.findByCouncilId(req.user.councilId)
@@ -1147,28 +1118,43 @@ app.get(
     }
   }
 )
-app.put(
+
+app.post(
   '/api/head/review-report/:reportId',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
-    const updated = await WorkReport.updateStatus(
-      req.params.reportId,
-      'reviewed',
-      req.user.userId
-    )
+    try {
+      const report = await WorkReport.findById(req.params.reportId);
+      if (!report) {
+        return res.status(404).json({ message: 'Report not found' });
+      }
 
-    res.json({
-      message: 'Report reviewed',
-      report: updated
-    })
+      const updated = await WorkReport.updateStatus(
+        req.params.reportId,
+        'reviewed',
+        req.user.userId
+      )
+
+      const reportAuthor = await UserProfile.findByCouncilId((await User.findById(report.user_id)).council_id);
+
+      await createSystemLog(pool, req.user.userId, req.user.role, 'REVIEW', 'REPORT', report.id, `Reviewed report: "${report.title}" by ${reportAuthor?.name || 'Unknown'}`, 'INFO');
+
+      res.json({
+        message: 'Report reviewed',
+        report: updated
+      })
+    } catch (error) {
+      console.error('Review report error:', error)
+      res.status(500).json({ message: 'Failed to review report' })
+    }
   }
 )
 
 app.get(
   '/api/head/notifications/count',
   authenticateToken,
-  authorizeRole('committee_head'),
+  authorizeRole('committee_head', 'admin'),
   async (req, res) => {
     try {
       const profile = await UserProfile.findByCouncilId(req.user.councilId)
@@ -1198,8 +1184,11 @@ app.get(
   }
 )
 
-// GS Routes
-app.get('/api/gs/all-committees-insights', authenticateToken, authorizeRole('gs'), async (req, res) => {
+// ============================================
+// GS ROUTES
+// ============================================
+
+app.get('/api/gs/all-committees-insights', authenticateToken, authorizeRole('gs', 'admin'), async (req, res) => {
   try {
     const committees = await pool.query(
       'SELECT DISTINCT committee_name FROM user_profiles'
@@ -1231,37 +1220,30 @@ app.get('/api/gs/all-committees-insights', authenticateToken, authorizeRole('gs'
   }
 });
 
-// Backwards-compatible alias for older clients that call /api/gs/dashboard/summary
-// GS Routes - FIXED VERSION
-app.get('/api/gs/dashboard/summary', authenticateToken, authorizeRole('gs'), async (req, res) => {
+app.get('/api/gs/dashboard/summary', authenticateToken, authorizeRole('gs', 'admin'), async (req, res) => {
   try {
-    // 1️⃣ Total committees
     const committeesRes = await pool.query(
       'SELECT COUNT(DISTINCT committee_name) FROM user_profiles WHERE committee_name IS NOT NULL'
     );
     const totalCommittees = parseInt(committeesRes.rows[0].count) || 0;
 
-    // 2️⃣ Total members
     const membersRes = await pool.query(
       'SELECT COUNT(DISTINCT council_id) FROM user_profiles'
     );
     const totalMembers = parseInt(membersRes.rows[0].count) || 0;
 
-    // 3️⃣ Today's attendance
     const attendanceRes = await pool.query(`
       SELECT COUNT(DISTINCT user_id) FROM attendance_logs
       WHERE punch_in::date = CURRENT_DATE
     `);
     const todayAttendance = parseInt(attendanceRes.rows[0].count) || 0;
 
-    // 4️⃣ Pending leaves (GS approval)
     const pendingLeavesRes = await pool.query(`
       SELECT COUNT(*) FROM leave_applications
       WHERE gs_approval = false AND head_approval = true
     `);
     const pendingLeaves = parseInt(pendingLeavesRes.rows[0].count) || 0;
 
-    // Return summary data
     res.json({
       totalCommittees,
       totalMembers,
@@ -1277,8 +1259,7 @@ app.get('/api/gs/dashboard/summary', authenticateToken, authorizeRole('gs'), asy
   }
 });
 
-// Return list of distinct committees (used by GS filters)
-app.get('/api/gs/committees', authenticateToken, authorizeRole('gs'), async (req, res) => {
+app.get('/api/gs/committees', authenticateToken, authorizeRole('gs', 'admin'), async (req, res) => {
   try {
     const result = await pool.query('SELECT DISTINCT committee_name FROM user_profiles WHERE committee_name IS NOT NULL');
     const committees = result.rows.map(r => r.committee_name).filter(Boolean);
@@ -1288,7 +1269,7 @@ app.get('/api/gs/committees', authenticateToken, authorizeRole('gs'), async (req
     res.status(500).json({ message: 'Server error' });
   }
 });
-// GET ATTENDANCE ANALYTICS BY COMMITTEE
+
 app.get(
   '/api/gs/committee/attendance-analytics',
   authenticateToken,
@@ -1296,14 +1277,6 @@ app.get(
   async (req, res) => {
     try {
       const { committee, startDate, endDate } = req.query
-
-      // Debug logging
-      console.log('📊 Attendance Analytics Request:', {
-        userRole: req.user.role,
-        committee,
-        startDate,
-        endDate
-      })
 
       if (!committee || committee === 'all') {
         return res.status(400).json({ message: 'Committee required' })
@@ -1337,8 +1310,6 @@ app.get(
 
       const result = await pool.query(query, params)
 
-      console.log('✅ Analytics returned:', result.rows.length, 'days')
-
       res.json(
         result.rows.map(r => ({
           day: r.day,
@@ -1355,7 +1326,6 @@ app.get(
   }
 )
 
-// GET COMMITTEE MEMBERS WITH ATTENDANCE
 app.get(
   '/api/gs/committee/members',
   authenticateToken,
@@ -1363,14 +1333,6 @@ app.get(
   async (req, res) => {
     try {
       const { committee, startDate, endDate } = req.query
-
-      // Debug logging
-      console.log('👥 Committee Members Request:', {
-        userRole: req.user.role,
-        committee,
-        startDate,
-        endDate
-      })
 
       if (!committee || committee === 'all') {
         return res.status(400).json({ message: 'Committee required' })
@@ -1420,8 +1382,6 @@ app.get(
 
       const result = await pool.query(query, params)
 
-      console.log('✅ Members returned:', result.rows.length, 'members')
-
       res.json(result.rows)
     } catch (err) {
       console.error('❌ Committee members error:', err)
@@ -1433,21 +1393,146 @@ app.get(
   }
 )
 
-app.put('/api/gs/approve-leave/:leaveId',
+// ============================================
+// GS ROUTES - COMPLETE FIX
+// ============================================
+
+app.get(
+  '/api/gs/leaves/pending',
   authenticateToken,
-  authorizeRole('gs'),
+  authorizeRole('gs', 'admin'),
   async (req, res) => {
     try {
-      const updatedLeave = await LeaveApplication.updateGSApproval(req.params.leaveId)
+      const result = await pool.query(`
+        SELECT
+          la.id,
+          la.title,
+          la.content,
+          la.leave_from,
+          la.leave_to,
+          la.file_path,
+          la.head_approval,
+          la.gs_approval,
+          la.created_at,
+          up.name,
+          up.committee_name
+        FROM leave_applications la
+        JOIN users u ON u.id = la.user_id
+        JOIN user_profiles up ON up.council_id = u.council_id
+        WHERE la.head_approval = true
+        ORDER BY up.committee_name, la.created_at DESC
+      `)
+
+      const BASE_URL = process.env.BASE_URL || 'http://localhost:5005'
+
+      const grouped = {}
+      for (const row of result.rows) {
+        if (!grouped[row.committee_name]) {
+          grouped[row.committee_name] = []
+        }
+
+        grouped[row.committee_name].push({
+          ...row,
+          file_path: row.file_path
+            ? `${BASE_URL}${row.file_path}`
+            : null
+        })
+      }
+
+      res.json(grouped)
+    } catch (err) {
+      console.error('GS pending leaves error:', err)
+      res.status(500).json({ message: 'Failed to load pending leaves' })
+    }
+  }
+)
+
+app.get(
+  '/api/gs/reports/pending',
+  authenticateToken,
+  authorizeRole('gs', 'admin'),
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT
+          wr.id,
+          wr.title,
+          wr.content,
+          wr.report_date,
+          wr.status,
+          wr.file_path,
+          wr.created_at,
+          up.name,
+          up.committee_name
+        FROM work_reports wr
+        JOIN users u ON u.id = wr.user_id
+        JOIN user_profiles up ON up.council_id = u.council_id
+        WHERE wr.status IN ('reviewed', 'gs_reviewed')
+        ORDER BY up.committee_name, wr.created_at DESC
+      `)
+
+      const BASE_URL = process.env.BASE_URL || 'http://localhost:5005'
+      const grouped = {}
+
+      for (const row of result.rows) {
+        const committee = row.committee_name?.trim() || 'Unassigned'
+
+        if (!grouped[committee]) {
+          grouped[committee] = []
+        }
+
+        grouped[committee].push({
+          ...row,
+          file_path: row.file_path
+            ? `${BASE_URL}${row.file_path}`
+            : null
+        })
+      }
+
+      res.json(grouped)
+    } catch (err) {
+      console.error('GS pending reports error:', err)
+      res.status(500).json({ message: 'Failed to load reports' })
+    }
+  }
+)
+
+app.put(
+  '/api/gs/approve-leave/:leaveId',
+  authenticateToken,
+  authorizeRole('gs', 'admin'),
+  async (req, res) => {
+    try {
+      const leave = await LeaveApplication.findById(req.params.leaveId)
+      if (!leave) {
+        return res.status(404).json({ message: 'Leave not found' })
+      }
+
+      const updated = await LeaveApplication.updateGSApproval(req.params.leaveId)
+
+      const applicant = await UserProfile.findByCouncilId(
+        (await User.findById(leave.user_id)).council_id
+      )
+
+      await createSystemLog(
+        pool,
+        req.user.userId,
+        req.user.role,
+        'GS_APPROVE',
+        'LEAVE',
+        leave.id,
+        `GS approved leave: "${leave.title}" by ${applicant?.name || 'Unknown'} (${applicant?.committee_name || 'No Committee'})`,
+        'INFO'
+      )
 
       emitLeaveUpdate({
-        type: 'approved',
-        leaveId: updatedLeave.id,
-        userId: updatedLeave.user_id,
+        type: 'approved_by_gs',
+        leaveId: updated.id,
+        userId: updated.user_id,
         timestamp: new Date().toISOString()
       })
 
-      res.json({ message: 'Approved by GS', leave: updatedLeave })
+      res.json({ message: 'Leave approved by GS', leave: updated })
     } catch (err) {
       console.error('GS approve leave error:', err)
       res.status(500).json({ message: 'Failed to approve leave' })
@@ -1455,9 +1540,104 @@ app.put('/api/gs/approve-leave/:leaveId',
   }
 )
 
+app.put(
+  '/api/gs/reject-leave/:leaveId',
+  authenticateToken,
+  authorizeRole('gs', 'admin'),
+  async (req, res) => {
+    const { reason } = req.body
+    if (!reason) {
+      return res.status(400).json({ message: 'Reason required' })
+    }
 
+    try {
+      const leave = await LeaveApplication.findById(req.params.leaveId)
+      if (!leave) {
+        return res.status(404).json({ message: 'Leave not found' })
+      }
 
-// Utility functions
+      await pool.query(
+        `
+        UPDATE leave_applications
+        SET head_approval = false
+        WHERE id = $1 AND gs_approval = false
+        `,
+        [req.params.leaveId]
+      )
+
+      const applicant = await UserProfile.findByCouncilId(
+        (await User.findById(leave.user_id)).council_id
+      )
+
+      await createSystemLog(
+        pool,
+        req.user.userId,
+        req.user.role,
+        'GS_REJECT',
+        'LEAVE',
+        leave.id,
+        `GS rejected leave: "${leave.title}" by ${applicant?.name || 'Unknown'} (${applicant?.committee_name || 'No Committee'}) - Reason: ${reason}`,
+        'WARNING'
+      )
+
+      emitLeaveUpdate({
+        type: 'rejected_by_gs',
+        leaveId: req.params.leaveId,
+        reason
+      })
+
+      res.json({ message: 'Leave rejected by GS' })
+    } catch (err) {
+      console.error('GS reject leave error:', err)
+      res.status(500).json({ message: 'Failed to reject leave' })
+    }
+  }
+)
+
+app.put(
+  '/api/gs/review-report/:reportId',
+  authenticateToken,
+  authorizeRole('gs', 'admin'),
+  async (req, res) => {
+    try {
+      const report = await WorkReport.findById(req.params.reportId)
+      if (!report) {
+        return res.status(404).json({ message: 'Report not found' })
+      }
+
+      const updated = await WorkReport.updateStatus(
+        req.params.reportId,
+        'gs_reviewed',
+        req.user.userId
+      )
+
+      const reportAuthor = await UserProfile.findByCouncilId(
+        (await User.findById(report.user_id)).council_id
+      )
+
+      await createSystemLog(
+        pool,
+        req.user.userId,
+        req.user.role,
+        'GS_REVIEW',
+        'REPORT',
+        report.id,
+        `GS reviewed report: "${report.title}" by ${reportAuthor?.name || 'Unknown'} from ${reportAuthor?.committee_name || 'No Committee'}`,
+        'INFO'
+      )
+
+      res.json({ message: 'Report reviewed', report: updated })
+    } catch (err) {
+      console.error('GS review report error:', err)
+      res.status(500).json({ message: 'Failed to review report' })
+    }
+  }
+)
+
+// ============================================
+// UTILITY FUNCTIONS & REMAINING ROUTES
+// ============================================
+
 async function calculateAttendanceRate(userIds) {
   if (userIds.length === 0) return 0;
   
@@ -1468,7 +1648,6 @@ async function calculateAttendanceRate(userIds) {
   return Math.round((actualAttendance / totalPossible) * 100);
 }
 
-// Initialize default admin user
 const initDefaultAdmin = async () => {
   try {
     const existingAdmin = await User.findByCouncilId('Vicky+++');
@@ -1485,6 +1664,11 @@ const initDefaultAdmin = async () => {
     console.error('Error creating default admin:', error);
   }
 };
+
+// ============================================
+// BULK CREATE PROFILES (continued)
+// ============================================
+
 app.post(
   '/api/admin/bulk-create-profiles',
   authenticateToken,
@@ -1498,7 +1682,6 @@ app.post(
     const created = []
     const updated = []
     const errors = []
-
     const rows = []
 
     fs.createReadStream(req.file.path)
@@ -1518,6 +1701,8 @@ app.post(
                 password: await bcrypt.hash('default123', 10),
                 role: 'member'
               })
+
+              await createSystemLog(pool, req.user.userId, req.user.role, 'CREATE', 'USER', user.id, `Auto-created user from bulk profile: ${councilId}`, 'INFO');
             }
 
             const profileData = {
@@ -1543,9 +1728,13 @@ app.post(
             if (existingProfile) {
               await UserProfile.updateByCouncilId(councilId, profileData)
               updated.push(councilId)
+
+              await createSystemLog(pool, req.user.userId, req.user.role, 'UPDATE', 'PROFILE', existingProfile.id, `Bulk updated profile: ${councilId} (${row['Name']}) - Committee: ${row['Committee/Team name']}`, 'INFO');
             } else {
-              await UserProfile.create(profileData)
+              const newProfile = await UserProfile.create(profileData)
               created.push(councilId)
+
+              await createSystemLog(pool, req.user.userId, req.user.role, 'CREATE', 'PROFILE', newProfile.id, `Bulk created profile: ${councilId} (${row['Name']}) - Committee: ${row['Committee/Team name']} - Position: ${row['Position']}`, 'INFO');
             }
           } catch (err) {
             errors.push(err.message)
@@ -1553,6 +1742,8 @@ app.post(
         }
 
         fs.unlinkSync(req.file.path)
+
+        await createSystemLog(pool, req.user.userId, req.user.role, 'BULK_CREATE', 'PROFILE', null, `Bulk profile operation: ${created.length} created, ${updated.length} updated (${errors.length} errors)`, 'INFO');
 
         res.json({
           created: created.length,
@@ -1563,6 +1754,11 @@ app.post(
       })
   }
 )
+
+// ============================================
+// COMMITTEES ROUTES
+// ============================================
+
 app.get(
   '/api/committees',
   authenticateToken,
@@ -1584,10 +1780,14 @@ app.get(
   }
 )
 
+// ============================================
+// ATTENDANCE REPORTS
+// ============================================
+
 app.get(
   '/api/admin/attendance-report',
   authenticateToken,
-  authorizeRole('admin'),
+  authorizeRole('admin', 'gs'),
   async (req, res) => {
     const { startDate, endDate, committee = 'all' } = req.query
 
@@ -1674,10 +1874,11 @@ LEFT JOIN heads h ON h.committee_name = a.committee_name
 CROSS JOIN range_meta rm
 ORDER BY a.committee_name, a.name;
 `
+
 app.get(
   '/api/admin/attendance-report/pdf',
   authenticateToken,
-  authorizeRole('admin'),
+  authorizeRole('admin', 'gs'),
   async (req, res) => {
     try {
       const { committee = 'all', startDate, endDate } = req.query
@@ -1686,9 +1887,6 @@ app.get(
         return res.status(400).json({ message: 'Date range required' })
       }
 
-      /* ============================
-         SINGLE OPTIMIZED QUERY
-      ============================ */
       const params = [startDate, endDate]
       let committeeFilter = ''
 
@@ -1726,9 +1924,6 @@ app.get(
         params
       )
 
-      /* ============================
-         SHAPE DATA FOR PDF
-      ============================ */
       const grouped = {}
 
       for (const row of result.rows) {
@@ -1777,9 +1972,6 @@ app.get(
           .json({ message: 'No attendance data found' })
       }
 
-      /* ============================
-         GENERATE PDF
-      ============================ */
       const generateAttendancePdf =
         require('./utils/generateAttendancePdf')
 
@@ -1794,10 +1986,15 @@ app.get(
     }
   }
 )
+
+// ============================================
+// SYSTEM LOGS ROUTES
+// ============================================
+
 app.get(
   '/api/admin/logs',
   authenticateToken,
-  authorizeRole('admin','gs'),
+  authorizeRole('admin', 'gs'),
   async (req, res) => {
     try {
       const {
@@ -1811,7 +2008,6 @@ app.get(
       const filters = []
       const values = []
 
-      /* ================= DATE FILTER ================= */
       if (startDate) {
         values.push(startDate)
         filters.push(`log_time >= $${values.length}`)
@@ -1837,7 +2033,6 @@ app.get(
 
       let sql = ''
 
-      /* ================= ATTENDANCE LOGS ================= */
       if (type === 'attendance') {
         sql = `
           SELECT
@@ -1854,7 +2049,6 @@ app.get(
         `
       }
 
-      /* ================= REPORT LOGS ================= */
       else if (type === 'reports') {
         sql = `
           SELECT
@@ -1868,7 +2062,6 @@ app.get(
         `
       }
 
-      /* ================= LEAVE LOGS ================= */
       else if (type === 'leaves') {
         sql = `
           SELECT
@@ -1886,7 +2079,6 @@ app.get(
         `
       }
 
-      /* ================= LOGIN LOGS ================= */
       else if (type === 'login') {
         sql = `
           SELECT
@@ -1900,7 +2092,6 @@ app.get(
         `
       }
 
-      /* ================= SYSTEM LOGS ================= */
       else {
         sql = `
           SELECT
@@ -1968,7 +2159,6 @@ app.get(
         committeeName = profile?.committee_name
       }
 
-      /* ================= DATE ================= */
       if (startDate) {
         values.push(startDate)
         filters.push(`log_time >= $${values.length}`)
@@ -1996,7 +2186,6 @@ app.get(
 
       let sql = ''
 
-      /* ================= SAME QUERIES AS /logs ================= */
       if (type === 'attendance') {
         sql = `
           SELECT
@@ -2121,7 +2310,232 @@ app.get(
     }
   }
 )
-// ================= GLOBAL ERROR HANDLER (FIX) =================
+// ============================================
+// BIOMETRIC ROUTES
+// ============================================
+// Admin marks attendance for a member after biometric verification
+app.post('/api/admin/mark-attendance', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    const { councilId, fingerprintTemplate } = req.body;
+
+    if (!councilId || !fingerprintTemplate) {
+      return res.status(400).json({ message: 'Missing required fields' });
+    }
+
+    // Verify biometric
+    const isValid = await BiometricRegistration.verify(councilId, fingerprintTemplate);
+    
+    if (!isValid) {
+      await createSystemLog(
+        pool,
+        req.user.userId,
+        req.user.role,
+        'BIOMETRIC_FAILED',
+        'ATTENDANCE',
+        null,
+        `Failed biometric verification for attendance: ${councilId}`,
+        'WARNING'
+      );
+      return res.status(401).json({ message: 'Biometric verification failed' });
+    }
+
+    // Get user by council ID
+    const user = await User.findByCouncilId(councilId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Mark attendance
+    const attendance = await Attendance.punchIn(user.id);
+
+    const profile = await UserProfile.findByCouncilId(user.council_id);
+
+    await createSystemLog(
+      pool,
+      req.user.userId,
+      req.user.role,
+      'ADMIN_PUNCH_IN',
+      'ATTENDANCE',
+      attendance.id,
+      `Admin marked attendance for ${profile?.name || 'Unknown'} (${profile?.committee_name || 'No Committee'})`,
+      'INFO'
+    );
+
+    emitAttendanceUpdate({
+      type: 'punch_in',
+      userId: user.id,
+      councilId: user.council_id,
+      name: profile?.name || 'Unknown',
+      committee: profile?.committee_name || null,
+      attendance,
+      timestamp: new Date().toISOString(),
+    });
+
+    res.json({ 
+      message: 'Attendance marked successfully', 
+      attendance,
+      member: {
+        name: profile?.name,
+        committee: profile?.committee_name
+      }
+    });
+  } catch (error) {
+    console.error('Admin mark attendance error:', error);
+    res.status(500).json({ message: 'Failed to mark attendance' });
+  }
+});
+// Get all biometric registrations
+app.get('/api/biometrics/all', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    const biometrics = await BiometricRegistration.findAll();
+    res.json(biometrics);
+  } catch (error) {
+    console.error('Get biometrics error:', error);
+    res.status(500).json({ message: 'Failed to fetch biometrics' });
+  }
+});
+
+// Register biometric for a member
+app.post('/api/biometrics/register', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    console.log('\n🔍 ===== BIOMETRIC REGISTER REQUEST =====');
+    console.log('Request body:', req.body);
+    console.log('User:', req.user);
+
+    const { councilId, fingerprintTemplate, name } = req.body;
+
+    // Validate input
+    if (!councilId) {
+      console.log('❌ Missing councilId');
+      return res.status(400).json({ message: 'Missing councilId' });
+    }
+    if (!fingerprintTemplate) {
+      console.log('❌ Missing fingerprintTemplate');
+      return res.status(400).json({ message: 'Missing fingerprintTemplate' });
+    }
+    if (!name) {
+      console.log('❌ Missing name');
+      return res.status(400).json({ message: 'Missing name' });
+    }
+
+    console.log('✅ All fields present');
+    console.log('Looking for user:', councilId);
+
+    // Check if user exists
+    const user = await User.findByCouncilId(councilId);
+    console.log('User found:', !!user);
+    
+    if (!user) {
+      console.log('❌ User not found for council_id:', councilId);
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    console.log('✅ User exists:', user.council_id);
+
+    // Check if already registered
+    console.log('Checking for existing registration...');
+    const existing = await BiometricRegistration.findByCouncilId(councilId);
+    
+    if (existing) {
+      console.log('✅ Existing registration found, updating...');
+      
+      const updated = await BiometricRegistration.update(existing.id, fingerprintTemplate);
+      
+      await createSystemLog(
+        pool,
+        req.user.userId,
+        req.user.role,
+        'UPDATE',
+        'BIOMETRIC',
+        updated.id,
+        `Updated biometric for: ${name} (${councilId})`,
+        'INFO'
+      );
+
+      console.log('✅ Biometric updated successfully');
+      return res.json({ 
+        message: 'Biometric updated successfully', 
+        biometric: updated 
+      });
+    }
+
+    // Create new registration
+    console.log('Creating new biometric registration...');
+    const newBiometric = await BiometricRegistration.create(
+      councilId,
+      name,
+      fingerprintTemplate
+    );
+
+    console.log('✅ New biometric created:', newBiometric);
+
+    await createSystemLog(
+      pool,
+      req.user.userId,
+      req.user.role,
+      'CREATE',
+      'BIOMETRIC',
+      newBiometric.id,
+      `Registered biometric for: ${name} (${councilId})`,
+      'INFO'
+    );
+
+    console.log('✅ System log created');
+    console.log('===== BIOMETRIC REGISTER SUCCESS =====\n');
+
+    res.json({ 
+      message: 'Biometric registered successfully', 
+      biometric: newBiometric 
+    });
+  } catch (error) {
+    console.error('\n❌ ===== BIOMETRIC REGISTER ERROR =====');
+    console.error('Error message:', error.message);
+    console.error('Error stack:', error.stack);
+    console.error('===== END ERROR =====\n');
+    
+    res.status(500).json({ 
+      message: 'Failed to register biometric',
+      error: error.message 
+    });
+  }
+});
+// Get biometric count (for dashboard stats)
+app.get('/api/admin/biometric-stats', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    const count = await BiometricRegistration.countRegistered();
+    res.json({ registered: count });
+  } catch (error) {
+    console.error('Biometric stats error:', error);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// Get all members (for member search)
+app.get('/api/admin/all-members', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        u.council_id,
+        up.name,
+        up.committee_name,
+        up.position
+      FROM users u
+      LEFT JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE u.is_active = true
+      ORDER BY up.name
+    `);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Get members error:', error);
+    res.status(500).json({ message: 'Failed to fetch members' });
+  }
+});
+
+// ============================================
+// GLOBAL ERROR HANDLER
+// ============================================
+
 app.use((err, req, res, next) => {
   console.error('❌ UNHANDLED SERVER ERROR:', err)
 
@@ -2132,7 +2546,5 @@ app.use((err, req, res, next) => {
     status
   })
 })
-
-
 
 module.exports = app;

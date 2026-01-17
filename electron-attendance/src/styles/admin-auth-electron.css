@@ -1,0 +1,440 @@
+/* Exact overlay design matching ERP mockup */
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&family=Montserrat:wght@500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Bebas+Neue:wght@400&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&display=swap");
+@font-face {
+  font-family: 'MyCustomFont';
+  /* The .. goes up one level from 'styles' to 'src', then into 'assets' */
+  src: url('../assets/fonts/3rd-Man.woff2') format('woff2'); 
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.electron-auth-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Full screen background image - no flex, pure background */
+.electron-background {
+  position: relative;
+  top: 30%;
+  left: 0 ;
+  width: 100%;
+  height: 80%;
+  background-image: url("../../public/erp-bg.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  z-index: 1;
+}
+
+.electron-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+}
+
+/* Left section - Top left absolute position */
+.electron-left-section {
+  /* background-image: url("../../public/ADMIN.png");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  position: relative;
+  top: 30%;
+  left: 0 ;
+  width: 40%;
+  height: 30%;
+  z-index: 1; */
+  position: absolute;
+  top: 80px;
+  left: 60px;
+  z-index: 11;
+}
+
+/* ADMIN LOGIN - Bebas Neue for grunge effect, positioned top left */
+.electron-title {
+  font-family: "3rd-Man", sans-serif;
+  font-size: 120px;
+  font-weight: 700;
+  letter-spacing: 8px;
+  color: #000;
+  margin: 0;
+  text-transform: uppercase;
+  line-height: 0.9;
+  font-style: italic;
+  opacity: 0;
+  animation: smoothReveal 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* READY - Poppins, positioned below ADMIN LOGIN */
+.electron-subtitle {
+  font-family: "Poppins", sans-serif;
+  font-size: 56px;
+  font-weight: 400;
+  color: #333;
+  margin: 0;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  line-height: 1;
+  margin-top: 15px;
+  opacity: 0;
+  animation: smoothReveal 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 0.3s;
+}
+
+/* Right section - Form positioned on right side, centered vertically */
+.electron-right-section {
+  position: absolute;
+  top: 30%;
+  right: 300px;
+  transform: translateY(-50%);
+  width: 420px;
+  z-index: 11;
+  pointer-events: auto;
+  opacity: 0;
+  animation: smoothReveal 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 0.6s;
+  animation: smoothRevealCentered 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 0.6s;
+  
+  
+}
+
+.electron-form {
+  display: flex;
+  flex-direction: column;
+  gap: 45px;
+  width: 100%;
+}
+
+.electron-form-group {
+  width: 100%;
+}
+
+/* Input fields - Playfair Display (Hussar Bold style), bottom border only */
+.electron-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 2.5px solid #555;
+  padding: 10px 0;
+  font-family: "Montserrat", serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: #777;
+  letter-spacing: 2px;
+  outline: none;
+}
+
+.electron-input::placeholder {
+  color: #888;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.electron-input:focus {
+  border-bottom-color: #333;
+  color: #333;
+}
+
+.electron-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.electron-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background-color: #c0bebe;
+  border-left: 4px solid #000000;
+  color: #000000;
+  font-size: 14px;
+  border-radius: 2px;
+  margin-top: 10px;
+}
+
+/* LOGIN button - Montserrat, gray background, positioned below inputs */
+.electron-login-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 32px;
+  background-color: #777;
+  color: white;
+  border: none;
+  font-family: "Montserrat", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  width: fit-content;
+  margin-top: 15px;
+}
+
+.electron-login-button:hover:not(:disabled) {
+  background-color: #666;
+}
+
+.electron-login-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.spinner-icon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Vertical text on right edge - rotated -90 degrees */
+.electron-vertical-text {
+  position: absolute;
+  right: 15px;
+  top: 15%;
+  transform: translateY(-50%) rotate(-90deg);
+  transform-origin: right center;
+  font-family: "Playfair Display", serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #000000;
+  white-space: nowrap;
+  letter-spacing: 1.5px;
+  z-index: 12;
+}
+
+/* Footer - positioned at bottom absolute */
+.electron-footer {
+  position: absolute;
+  bottom: 25px;
+  background-color: rgb(255, 255, 255);
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 60px;
+  z-index: 12;
+}
+
+/* ELECTRON SOFTWARE EDITION - Montserrat */
+.electron-software-edition {
+  font-family: "Montserrat", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  color: #000;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* V.1.0.26 - Marta/Monospace */
+.electron-version {
+  font-family: "Courier New", monospace;
+  font-size: 13px;
+  font-weight: 400;
+  color: #444;
+  letter-spacing: 1px;
+}
+
+@media (max-width: 1200px) {
+  .electron-left-section {
+    top: 60px;
+    left: 40px;
+  }
+
+  .electron-title {
+    font-size: 100px;
+  }
+
+  .electron-subtitle {
+    font-size: 48px;
+  }
+
+  .electron-right-section {
+    right: 80px;
+    width: 350px;
+  }
+}
+
+@media (max-width: 768px) {
+  .electron-left-section {
+    top: 40px;
+    left: 30px;
+  }
+
+  .electron-title {
+    font-size: 60px;
+  }
+
+  .electron-subtitle {
+    font-size: 32px;
+  }
+
+  .electron-right-section {
+    right: 30px;
+    width: 90%;
+    max-width: 300px;
+  }
+
+  .electron-vertical-text {
+    display: none;
+  }
+
+  .electron-footer {
+    flex-direction: column;
+    gap: 10px;
+    padding: 0 30px;
+  }
+}
+.clock-widget {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  z-index: 13;
+  opacity: 0;
+  border: 1px solid black;
+  animation: smoothReveal 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation-delay: 0.9s;
+}
+
+.digital-clock {
+  width: 100%;
+  height: 100%;
+}
+
+.digital-display {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* background-color: #1a1a1a; */
+  padding: 12px 16px;
+  border-radius: 8px;
+  /* box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1); */
+
+  white-space: nowrap;
+}
+
+.time-unit {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.time-value {
+  font-family: "Courier New", monospace;
+  font-size: 30px;
+  font-weight: 700;
+  color: black;
+  font-style: Bold;
+  letter-spacing: 1px;
+  line-height: 1;
+  min-width: 30px;
+  text-align: center;
+}
+
+.time-label {
+  font-family: "Montserrat", sans-serif;
+  font-size: 7px;
+  font-weight: 600;
+  color: #888;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  text-align: center;
+  
+}
+
+.time-separator {
+  font-family: "Courier New", monospace;
+  font-size: 14px;
+  font-weight: 700;
+  color: #666;
+  align-self: flex-start;
+  margin-top: 2px;
+  opacity: 0.7;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%, 49% {
+    opacity: 0.7;
+  }
+  50%, 100% {
+    opacity: 0.3;
+  }
+}
+
+@media (max-width: 768px) {
+  .clock-widget {
+    top: 15px;
+    right: 15px;
+  }
+
+  .digital-display {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+
+  .time-value {
+    font-size: 14px;
+    min-width: 24px;
+  }
+
+  .time-label {
+    font-size: 6px;
+  }
+
+  .time-separator {
+    font-size: 11px;
+  }
+}
+
+@keyframes smoothReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(40px); /* Start slightly below */
+    filter: blur(10px); /* Start blurry */
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0); /* End in original position */
+    filter: blur(0); /* Sharp focus */
+  }
+}
+@keyframes smoothRevealCentered {
+  0% {
+    opacity: 0;
+    transform: translateY(-40%); /* Start slightly lower than center */
+    filter: blur(5px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(-50%); /* End at exact center */
+    filter: blur(0);
+  }
+}

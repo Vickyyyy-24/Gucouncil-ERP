@@ -27,7 +27,7 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react'
-import { getSocket } from '@/lib/socket'
+import { getSocket, onSocketEvent } from '@/lib/socket'
 import { apiClient } from '@/lib/api'
 
 /* ================= CHART SETUP ================= */
@@ -56,30 +56,55 @@ export default function AttendanceTracker() {
 
   const fetchAttendanceData = async () => {
     try {
-  const data = await apiClient.getMyAttendance()
-  setAttendanceHistory(data)
-    } catch {
+      const data = await apiClient.getMyAttendance()
+      setAttendanceHistory(data)
+      console.log('✅ Attendance data loaded successfully')
+    } catch (err) {
+      console.error('❌ Failed to load attendance:', err)
       toast.error('Failed to load attendance')
     } finally {
       setLoading(false)
     }
   }
 
+  /* ================= FETCH ATTENDANCE ON MOUNT ================= */
   useEffect(() => {
     fetchAttendanceData()
-    const socket = getSocket()
-    socket.connect()
-    socket.on('attendance:update', fetchAttendanceData)
-    return () => {
-      socket.off('attendance:update')
-      socket.disconnect()
+  }, [])
+
+  /* ================= SOCKET LISTENER FOR ATTENDANCE UPDATES ================= */
+  useEffect(() => {
+    try {
+      const unsubscribe = onSocketEvent('attendance:update', (data) => {
+        console.log('📡 attendance:update event received:', data)
+        console.log('✅ Refreshing attendance data after socket update')
+        fetchAttendanceData()
+      })
+
+      return () => {
+        console.log('🧹 Cleaning up attendance tracker socket listener')
+        unsubscribe()
+      }
+    } catch (error) {
+      console.error('❌ Socket listener error:', error)
     }
   }, [])
 
+  const safeNumber = (v: any) => Number.isFinite(Number(v)) ? Number(v) : 0
+
   const totalDays = attendanceHistory.length
-  const totalHours = Math.round(attendanceHistory.reduce((sum, r) => sum + (r.total_hours || 0), 0))
-  const avgHours = totalDays > 0 ? (totalHours / totalDays).toFixed(1) : 0
-  
+
+  const totalHours = Math.round(
+    attendanceHistory.reduce(
+      (sum, r) => sum + safeNumber(r.total_hours),
+      0
+    )
+  )
+
+  const avgHours =
+    totalDays > 0
+      ? Number((totalHours / totalDays).toFixed(1))
+      : 0
 
   /* ================= CHART CONFIGS ================= */
   const dailyChartData = {
@@ -131,7 +156,17 @@ export default function AttendanceTracker() {
         </div>
         <div className="flex items-center gap-2 sm:gap-3 bg-emerald-50 px-3 sm:px-4 py-2 rounded-xl sm:rounded-2xl border border-emerald-100 self-start sm:self-auto">
           <Calendar className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600" />
-          <span className="text-emerald-900 font-bold text-xs sm:text-sm">Dec 2025 Cycle</span>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ delay: 0.2 }}
+            className="flex flex-col"
+          >
+            <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Active Cycle</p>
+            <span className="text-emerald-900 font-bold text-xs sm:text-sm">
+              {new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+            </span>
+          </motion.div>
         </div>
       </div>
 

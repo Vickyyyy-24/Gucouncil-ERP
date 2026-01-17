@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
-import { useAuth } from '../../contexts/AuthContext'
+import { useAuth } from '@/contexts/AuthContext'
 import { motion } from 'framer-motion'
 import Image from 'next/image'
 
@@ -14,7 +14,6 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
-
     try {
       await login(councilId, password)
     } catch (error) {
@@ -25,100 +24,134 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Background Pattern */}
-      <div className="absolute inset-0 opacity-30">
-        <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMzLjMxIDAgNiAyLjY5IDYgNnMtMi42OSA2LTYgNi02LTIuNjktNi02IDIuNjktNiA2LTZ6bTAgMmE0IDQgMCAxIDAgMCA4IDQgNCAwIDAgMCAwLTh6IiBmaWxsPSIjZmZmIi8+PC9nPjwvc3ZnPg==')] opacity-50"></div>
+    <div className="h-screen overflow-hidden bg-white flex flex-col font-sans">
+      
+      {/* --- HEADER STRIPS --- */}
+      {/* 1. Thick Navy Blue Bar */}
+      <div className="w-full h-16 bg-gradient-to-b from-[#000000] to-[#16213E]"></div>
+      {/* 2. Thin Gold Bar */}
+      <div className="w-full h-2 bg-[#C5A059]"></div>
+
+      {/* --- MAIN CONTENT AREA --- */}
+      <div className="flex-grow flex flex-col w-full max-w-[1920px] mx-auto px-6 md:px-12 lg:px-24 py-10 md:py-20">
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-start w-full">
+          
+          {/* --- LEFT: TITLE SECTION --- */}
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.6 }}
+            className="flex flex-col pt-4 md:pt-10"
+          >
+            <h1 className="text-5xl md:text-8xl lg:text-8xl font-black text-[#1c3359] uppercase tracking-tighter leading-none">
+              Council ERP
+            </h1>
+            <h2 className="text-3xl md:text-4xl lg:text-5xl font-poppins text-[#C5A059] uppercase tracking-[0.25em] mt-2 md:mt-4 ml-1">
+              Ready
+            </h2>
+          </motion.div>
+
+          {/* --- RIGHT: FORM SECTION --- */}
+          <motion.div 
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            className="w-full max-w-md md:ml-auto mt-8 md:mt-12"
+          >
+            <form onSubmit={handleSubmit} className="space-y-12">
+              
+              {/* Council ID Input */}
+              <div className="group">
+                {/* <label 
+                  htmlFor="councilId" 
+                  className="block text-xs font-bold text-gray-500 uppercase tracking-[0.15em] mb-3"
+                >
+                  Enter Your Council ID
+                </label> */}
+                <input
+                  id="councilId"
+                  type="text"
+                  value={councilId}
+                  onChange={(e) => setCouncilId(e.target.value)}
+                  placeholder="ENTER YOUR COUNCIL ID"
+                  disabled={loading}
+                  required
+                  className="w-full py-2 bg-transparent  border-b-[3px] border-gray-300 text-[#16213E] text-lg font-bold focus:outline-none focus:border-[#16213E] transition-colors duration-300 rounded-none"
+                  autoFocus
+                />
+              </div>
+
+              {/* Password Input */}
+              <div className="group">
+                {/* <label 
+                  htmlFor="password" 
+                  className="block text-xs font-bold text-gray-500 uppercase tracking-[0.15em] mb-3"
+                >
+                  Enter Your Password
+                </label> */}
+                <input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="ENTER YOUR PASSWORD"
+                  disabled={loading}
+                  required
+                  className="w-full py-2 bg-transparent  border-b-[3px] border-gray-300 text-[#16213E] text-lg font-bold focus:outline-none focus:border-[#16213E] transition-colors duration-300 rounded-none"
+                  
+                />
+              </div>
+
+              {/* Login Button */}
+              <div>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="bg-[#16213E] text-white text-sm font-bold uppercase tracking-[0.2em] px-12 py-4 hover:bg-[#2a3b66] transition-all duration-300 shadow-md"
+                >
+                  {loading ? '...Validating' : 'Login'}
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+
+        {/* --- DESKTOP COPYRIGHT (Vertical) --- */}
+        <div className="hidden md:block absolute right-4 top-[10px]-translate-y-1/2">
+          <p className="text-[10px] font-bold tracking-[0.2em] text-black/70" style={{ writingMode: 'vertical-rl' }}>
+            © 2025-26 STUDENT COUNCIL. ALL RIGHTS RESERVED.
+          </p>
+        </div>
       </div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="w-full max-w-md relative z-10"
-      >
-        <div className="bg-white/10 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/20 p-8 relative overflow-hidden">
-          {/* Glow Effect */}
-          <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-white/20 to-transparent"></div>
-          
-          <div className="text-center mb-8 relative">
-            <div className="w-24 h-24 bg-gradient-to-r from-primary-500 to-primary-700 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl ring-4 ring-white/10">
-              <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <h1 className="text-4xl font-bold text-white mb-3 tracking-tight">Dynamic CRM</h1>
-            <p className="text-slate-300 text-lg">Sign in to your account</p>
-          </div>
+      {/* --- IMAGE SECTION --- */}
+      {/* Using a standard <img> tag style logic here.
+          w-full + h-auto ensures the aspect ratio is PRESERVED. 
+          It will simply take up as much height as it needs to show the full width.
+      */}
+      <div className="w-full flex -mt-52 relative z-0">
+        <Image 
+          src="/bg.png"
+          alt="Campus Building"
+          width={2886}
+          height={500} // Aspect ratio placeholder, CSS below overrides it
+          className="w-full h-auto block align-bottom"
+          priority
+        />
+      </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="councilId" className="block text-sm font-medium text-slate-300 mb-2">
-                  Council ID
-                </label>
-                <div className="relative">
-                  <input
-                    id="councilId"
-                    type="text"
-                    value={councilId}
-                    onChange={(e) => setCouncilId(e.target.value)}
-                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent backdrop-blur-sm transition-all duration-200"
-                    placeholder="Enter your Council ID"
-                    required
-                  />
-                  <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary-500/10 to-primary-700/10 pointer-events-none"></div>
-                </div>
-              </div>
+      {/* --- FOOTER BAR --- */}
+      <div className="w-full bg-gradient-to-b from-[#000000] to-[#16213E] py-4 px-6 md:px-12 flex z-40 justify-between items-center border-t-4 border-[#C5A059]">
+  <span className="text-white font-extrabold tracking-[0.15em] uppercase text-xs md:text-sm">
+    Web ERP Editions
+  </span>
+  <span className="text-white/80 font-poppins text-sm tracking-wider">
+    V.1.0.26
+  </span>
+</div>
+      
 
-              <div>
-                <label htmlFor="password" className="block text-sm font-medium text-slate-300 mb-2">
-                  Password
-                </label>
-                <div className="relative">
-                  <input
-                    id="password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent backdrop-blur-sm transition-all duration-200"
-                    placeholder="Enter your password"
-                    required
-                  />
-                  <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary-500/10 to-primary-700/10 pointer-events-none"></div>
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-gradient-to-r from-primary-600 to-primary-700 hover:from-primary-700 hover:to-primary-800 text-white font-semibold py-3.5 px-4 rounded-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 focus:ring-offset-transparent"
-            >
-              {loading ? (
-                <div className="flex items-center justify-center">
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Signing in...
-                </div>
-              ) : (
-                'Sign In'
-              )}
-            </button>
-          </form>
-
-          <div className="mt-8 text-center">
-            <p className="text-sm text-slate-400 bg-white/5 rounded-lg py-2 px-4 inline-block backdrop-blur-sm">
-              Default Admin: <span className="font-mono text-white">Vicky+++ / admin123</span>
-            </p>
-          </div>
-
-          {/* Background Decoration */}
-          <div className="absolute bottom-0 left-0 w-full h-1/2 bg-gradient-to-t from-primary-600/20 to-transparent pointer-events-none"></div>
-        </div>
-      </motion.div>
     </div>
   )
 }
