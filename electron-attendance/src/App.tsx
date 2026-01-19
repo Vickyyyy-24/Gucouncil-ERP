@@ -14,6 +14,10 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [deviceConnected, setDeviceConnected] = useState(false);
 
+  // ============================================
+  // INITIALIZATION
+  // ============================================
+
   useEffect(() => {
     checkStoredAuth();
     initializeBiometric();
@@ -26,9 +30,33 @@ export default function App() {
     (window as any).electronAPI?.onDeviceDisconnected?.(handleDeviceDisconnected);
 
     return () => {
-      // Cleanup listeners
+      // Cleanup listeners if needed
     };
   }, []);
+
+  // Check biometric device status
+  useEffect(() => {
+    const checkBiometric = async () => {
+      try {
+        const result = await (window as any).electronAPI?.biometric?.getStatus?.();
+        console.log('✅ Device Status:', result);
+        if (result?.connected) {
+          setDeviceConnected(true);
+        }
+      } catch (err) {
+        console.error('❌ Device check error:', err);
+        setDeviceConnected(false);
+      }
+    };
+
+    checkBiometric();
+    const interval = setInterval(checkBiometric, 5000); // Check every 5 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  // ============================================
+  // HANDLERS
+  // ============================================
 
   const checkStoredAuth = () => {
     try {
@@ -58,13 +86,19 @@ export default function App() {
         console.log('✅ Biometric device initialized:', result.message);
       } else {
         console.warn('⚠️ Biometric init warning:', result?.error);
+        setDeviceConnected(false);
       }
     } catch (error) {
       console.error('❌ Failed to initialize biometric:', error);
+      setDeviceConnected(false);
     }
   };
 
-  const handleAuthSuccess = (newToken: string, newAdminId: string, newAdminName: string) => {
+  const handleAuthSuccess = (
+    newToken: string,
+    newAdminId: string,
+    newAdminName: string
+  ) => {
     try {
       localStorage.setItem('token', newToken);
       localStorage.setItem('adminId', newAdminId);
@@ -103,6 +137,10 @@ export default function App() {
     setCurrentPage(page);
   };
 
+  // ============================================
+  // LOADING STATE
+  // ============================================
+
   if (isLoading) {
     return (
       <div className="app loading-screen">
@@ -112,12 +150,18 @@ export default function App() {
     );
   }
 
+  // ============================================
+  // RENDER
+  // ============================================
+
   return (
     <div className="app">
+      {/* AUTH PAGE */}
       {currentPage === 'auth' && (
         <AdminAuthPage onAuthSuccess={handleAuthSuccess} />
       )}
 
+      {/* DASHBOARD */}
       {currentPage === 'dashboard' && token && adminId && (
         <Dashboard
           token={token}
@@ -128,7 +172,7 @@ export default function App() {
         />
       )}
 
-      {/* NEW: Electron-based Biometric Registration */}
+      {/* BIOMETRIC ADMIN PANEL */}
       {currentPage === 'biometric-admin' && token && adminId && (
         <BiometricAdminPanel
           token={token}
@@ -139,38 +183,42 @@ export default function App() {
         />
       )}
 
-      {/* NEW: Electron-based Attendance Marking */}
+      {/* ATTENDANCE MARKING - CORRECTED */}
       {currentPage === 'attendance-marking' && token && adminId && (
         <AttendanceMarking
           token={token}
-          adminId={adminId}
           adminName={adminName}
           onLogout={handleLogout}
           onNavigateBack={() => setCurrentPage('dashboard')}
+          isPublicKiosk={false}
         />
       )}
 
-      {/* LEGACY: Web-based Registration (Optional - can be removed)
-      {currentPage === 'registration' && token && adminId && (
-        <MemberBiometricRegistration
-          token={token}
-          adminId={adminId}
-          adminName={adminName}
-          onLogout={handleLogout}
-          onNavigateBack={() => setCurrentPage('dashboard')}
-        />
-      )} */}
+      {/* 
+        LEGACY OPTIONS (Commented out - uncomment if needed)
+        
+        Web-based Registration:
+        {currentPage === 'registration' && token && adminId && (
+          <MemberBiometricRegistration
+            token={token}
+            adminId={adminId}
+            adminName={adminName}
+            onLogout={handleLogout}
+            onNavigateBack={() => setCurrentPage('dashboard')}
+          />
+        )}
 
-      {/* LEGACY: Web-based Attendance (Optional - can be removed) */}
-      {/* {currentPage === 'attendance' && token && adminId && (
-        <MemberAttendanceMarking
-          token={token}
-          adminId={adminId}
-          adminName={adminName}
-          onLogout={handleLogout}
-          onNavigateBack={() => setCurrentPage('dashboard')}
-        />
-      )} */}
+        Web-based Attendance:
+        {currentPage === 'attendance' && token && adminId && (
+          <MemberAttendanceMarking
+            token={token}
+            adminId={adminId}
+            adminName={adminName}
+            onLogout={handleLogout}
+            onNavigateBack={() => setCurrentPage('dashboard')}
+          />
+        )}
+      */}
     </div>
   );
 }

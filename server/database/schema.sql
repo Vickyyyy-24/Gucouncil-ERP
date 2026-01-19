@@ -38,13 +38,25 @@ CREATE TABLE IF NOT EXISTS login_logs (
   login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- CREATE TABLE IF NOT EXISTS attendance_logs (
+--   id SERIAL PRIMARY KEY,
+--   user_id INTEGER NOT NULL REFERENCES users(id),
+--   punch_in TIMESTAMP,
+--   punch_out TIMESTAMP,
+--   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+-- );
+
 CREATE TABLE IF NOT EXISTS attendance_logs (
   id SERIAL PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id),
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   punch_in TIMESTAMP,
   punch_out TIMESTAMP,
+  status VARCHAR(50) DEFAULT 'punched_in',
+  biometric_verified BOOLEAN DEFAULT false,
+  biometric_quality NUMERIC(3,1),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
 
 CREATE TABLE IF NOT EXISTS leave_applications (
   id SERIAL PRIMARY KEY,
@@ -113,8 +125,8 @@ ON system_logs(actor_role, action, created_at DESC);
 CREATE TABLE IF NOT EXISTS biometric_registrations (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  council_id VARCHAR(255) UNIQUE NOT NULL REFERENCES users(council_id),
-  name VARCHAR(255) NOT NULL,
+  council_id VARCHAR(255) UNIQUE NOT NULL,
+  ADD COLUMN name VARCHAR(255);
   fingerprint_template TEXT NOT NULL,
   is_active BOOLEAN DEFAULT true,
   registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -122,11 +134,3 @@ CREATE TABLE IF NOT EXISTS biometric_registrations (
   CONSTRAINT unique_user_biometric UNIQUE(user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_biometric_user_id 
-ON biometric_registrations(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_biometric_council_id 
-ON biometric_registrations(council_id);
-
-CREATE INDEX IF NOT EXISTS idx_biometric_is_active 
-ON biometric_registrations(is_active);

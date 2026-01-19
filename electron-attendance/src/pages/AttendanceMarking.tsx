@@ -1,349 +1,551 @@
-import React, { useState, useEffect } from 'react';
-import axios from 'axios';
-import { Fingerprint, AlertCircle, CheckCircle, Loader, LogOut } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from "react"
+import axios from "axios"
+import { Fingerprint, AlertCircle, CheckCircle, Loader, RefreshCw } from "lucide-react"
 import '../styles/attendance.css';
 
-interface AttendanceRecord {
-  id: number;
-  councilId: string;
-  name: string;
-  committee: string;
-  status: 'punched_in' | 'punched_out';
-  timestamp: string;
+interface AttendanceRecordUI {
+  id: number
+  council_id: string
+  name: string
+  committee: string
+  status: "punched_in" | "completed"
+  punch_in: string
+  punch_out?: string
+  duration_minutes?: number
+  biometric_quality?: number
 }
 
 interface AttendanceMarkingProps {
-  token: string;
-  adminId: string;
-  adminName: string;
-  onLogout: () => void;
-  onNavigateBack: () => void;
+  token?: string
+  adminId?: string
+  adminName?: string
+  onLogout?: () => void
+  onNavigateBack?: () => void
+  isPublicKiosk?: boolean
 }
+
+/**
+ * Electron Capture Result type
+ * This is RAW template capture (NOT match)
+ */
+type ElectronCaptureResponse =
+  | { success: true; template: string }
+  | { success: false; error: string }
+
+
 
 export default function AttendanceMarking({
   token,
-  adminId,
   adminName,
   onLogout,
-  onNavigateBack
+  onNavigateBack,
+  isPublicKiosk = true,
 }: AttendanceMarkingProps) {
-  const [isActive, setIsActive] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [lastScan, setLastScan] = useState<AttendanceRecord | null>(null);
-  const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord[]>([]);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [deviceConnected, setDeviceConnected] = useState(false);
-  const [loadingRecords, setLoadingRecords] = useState(false);
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5005"
 
-  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5005';
+  const [deviceConnected, setDeviceConnected] = useState(false)
+  const [isActive, setIsActive] = useState(false)
+
+  const [scanning, setScanning] = useState(false)
+  const [loadingRecords, setLoadingRecords] = useState(false)
+
+  const [error, setError] = useState("")
+  const [success, setSuccess] = useState("")
+
+  const [lastScan, setLastScan] = useState<AttendanceRecordUI | null>(null)
+  const [todayAttendance, setTodayAttendance] = useState<AttendanceRecordUI[]>([])
+
+  // ---------------- HELPERS ----------------
+  const resetMessages = (ms = 3500) => {
+    setTimeout(() => {
+      setError("")
+      setSuccess("")
+    }, ms)
+  }
+
+  // ---------------- DEVICE CHECK ----------------
+  const checkDeviceStatus = useCallback(async () => {
+    try {
+      const res = await window.electronAPI?.biometric?.getStatus?.()
+      setDeviceConnected(res?.connected === true)
+    } catch (err) {
+      console.error("Device check error:", err)
+      setDeviceConnected(false)
+    }
+  }, [])
 
   useEffect(() => {
-    checkDeviceStatus();
-    loadTodayAttendance();
+    checkDeviceStatus()
 
-    // Poll device status every 2 seconds
-    const interval = setInterval(checkDeviceStatus, 2000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const checkDeviceStatus = async () => {
-    try {
-      const result = await (window as any).electronAPI?.biometric?.getStatus?.();
-      if (result?.connected) {
-        setDeviceConnected(true);
-      } else {
-        setDeviceConnected(false);
-      }
-    } catch (err) {
-      console.error('Device check error:', err);
-      setDeviceConnected(false);
+    // ✅ Admin mode auto load live attendance list
+    if (!isPublicKiosk && token) {
+      loadTodayAttendance()
     }
-  };
 
+    const interval = setInterval(checkDeviceStatus, 2000)
+    return () => clearInterval(interval)
+  }, [])
+
+  // ---------------- ADMIN: LIVE LIST ----------------
   const loadTodayAttendance = async () => {
+    if (!token) return
     try {
-      setLoadingRecords(true);
-      const response = await axios.get(`${backendUrl}/api/attendance/today`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setTodayAttendance(response.data || []);
-    } catch (err) {
-      console.error('Failed to load attendance:', err);
-    } finally {
-      setLoadingRecords(false);
-    }
-  };
+      setLoadingRecords(true)
 
+      const response = await axios.get(`${backendUrl}/api/attendance/today/live`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      const raw = response.data?.present || []
+
+      const mapped: AttendanceRecordUI[] = raw.map((r: any, idx: number) => ({
+        id: idx + 1,
+        council_id: r.council_id,
+        name: r.name,
+        committee: r.committee,
+        status: "punched_in",
+        punch_in: r.punch_in,
+        duration_minutes: r.duration_minutes,
+        biometric_quality: r.biometric_quality,
+      }))
+
+      setTodayAttendance(mapped)
+    } catch (err) {
+      console.error("loadTodayAttendance error:", err)
+    } finally {
+      setLoadingRecords(false)
+    }
+  }
+
+  // ---------------- SYSTEM START/STOP ----------------
   const handleStartAttendance = () => {
     if (!deviceConnected) {
-      setError('Fingerprint device not connected. Please connect the device.');
-      return;
+      setError("❌ Fingerprint device not connected. Please check USB connection.")
+      resetMessages()
+      return
     }
-    setIsActive(true);
-    setSuccess('✅ Attendance system activated!');
-    setError('');
-    setTimeout(() => setSuccess(''), 3000);
-  };
+    setIsActive(true)
+    setError("")
+    setSuccess("✅ Attendance system activated! Ready to scan.")
+    resetMessages(2500)
+  }
 
   const handleStopAttendance = () => {
-    setIsActive(false);
-    setSuccess('ℹ️ Attendance system deactivated!');
-    setError('');
-    setTimeout(() => setSuccess(''), 3000);
-  };
+    setIsActive(false)
+    setError("")
+    setSuccess("ℹ️ Attendance system deactivated.")
+    resetMessages(2500)
+  }
 
+  // ==========================================================
+  // ✅ NEW MAIN SCAN FLOW (CAPTURE TEMPLATE -> SEND TO BACKEND)
+  // ==========================================================
   const handleScanFingerprint = async () => {
     if (!isActive) {
-      setError('Please start the attendance system first');
-      return;
+      setError("⚠️ Please start attendance system first.")
+      resetMessages()
+      return
     }
 
     if (!deviceConnected) {
-      setError('Fingerprint device not connected');
-      await checkDeviceStatus();
-      return;
+      setError("❌ Fingerprint device not connected.")
+      await checkDeviceStatus()
+      resetMessages()
+      return
     }
 
     try {
-      setScanning(true);
-      setError('');
-      setSuccess('');
+      setScanning(true)
+      setError("")
+      setSuccess("")
 
-      // Call Electron IPC to capture and verify fingerprint
-      const result = await (window as any).electronAPI?.biometric?.capture?.({
-        purpose: 'attendance'
-      });
+      // ✅ 1) Capture fingerprint template from hardware
+      const capRes = await window.electronAPI?.biometric?.capture?.({
+        purpose: "attendance",
+      })
 
-      if (!result?.success) {
-        setError(result?.error || 'Failed to capture fingerprint');
-        return;
+      if (!capRes || capRes.success !== true || !capRes.template) {
+        setError(capRes?.error || "❌ Capture failed. Please try again.")
+        resetMessages()
+        return
       }
 
-      // Verify biometric with backend
-      const verifyResponse = await axios.post(
-        `${backendUrl}/api/biometrics/verify`,
-        { fingerprintTemplate: result.template },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      const template = capRes.template
 
-      if (!verifyResponse.data?.councilId) {
-        setError('Fingerprint not recognized. Please register first.');
-        return;
+      // ✅ 2) First try punch-in
+      // Backend will match fingerprintTemplate -> user -> check status -> punch in
+      const punchInRes = await axios.post(`${backendUrl}/api/attendance/kiosk/punch-in`, {
+        fingerprintTemplate: template,
+      })
+
+      if (punchInRes.data?.success === true) {
+        const member = punchInRes.data?.member
+        setLastScan({
+          id: Date.now(),
+          council_id: member.council_id,
+          name: member.name,
+          committee: member.committee,
+          status: "punched_in",
+          punch_in: member.punch_in,
+        })
+
+        setSuccess(`✅ ${member.name} PUNCHED IN successfully!`)
+        resetMessages(5000)
+
+        if (!isPublicKiosk && token) await loadTodayAttendance()
+        return
       }
 
-      // Mark attendance
-      const attendanceResponse = await axios.post(
-        `${backendUrl}/api/attendance/punch-in`,
-        { fingerprintTemplate: result.template },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      const attendance = attendanceResponse.data.attendance;
-      setLastScan({
-        id: attendance.id,
-        councilId: attendance.council_id,
-        name: attendance.name || 'Unknown',
-        committee: attendance.committee || 'N/A',
-        status: attendance.status,
-        timestamp: new Date(attendance.punch_in).toLocaleTimeString()
-      });
-
-      setSuccess(`✅ ${attendance.name} - ${attendance.status === 'punched_in' ? 'Punch In' : 'Punch Out'} recorded`);
-      await loadTodayAttendance();
-
-      // Clear message after 4 seconds
-      setTimeout(() => setSuccess(''), 4000);
+      // ✅ If punch-in fails due to already punched in, try punch-out
+      // (Your backend returns "Already punched in" with 400)
     } catch (err: any) {
-      setError(err.response?.data?.message || err.message || 'Failed to mark attendance');
-    } finally {
-      setScanning(false);
-    }
-  };
+      const msg = err?.response?.data?.message
 
-  return (
-    <div className="attendance-marking-container">
-      <header className="admin-header">
-        <div className="header-content">
-          <div className="header-title">
-            <Fingerprint className="header-icon" />
+      // ✅ If already punched in -> try punch-out
+      if (String(msg || "").toLowerCase().includes("already punched in")) {
+        await tryPunchOutFlow()
+        return
+      }
+
+      // Normal errors
+      setError("❌ " + String(msg || err.message || "Attendance failed"))
+      resetMessages()
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  // ✅ Punch-out flow with 30 min rule handled by backend
+  const tryPunchOutFlow = async () => {
+    try {
+      setScanning(true)
+      setError("")
+      setSuccess("")
+
+      const capRes = await window.electronAPI?.biometric?.capture?.({
+        purpose: "attendance",
+      })
+
+      if (!capRes || capRes.success !== true || !capRes.template) {
+        setError(capRes?.error || "❌ Capture failed. Try again.")
+        resetMessages()
+        return
+      }
+
+      const punchOutRes = await axios.post(`${backendUrl}/api/attendance/kiosk/punch-out`, {
+        fingerprintTemplate: capRes.template,
+      })
+
+      if (punchOutRes.data?.success !== true) {
+        setError("❌ " + String(punchOutRes.data?.message || "Punch-out failed"))
+        resetMessages()
+        return
+      }
+
+      const member = punchOutRes.data?.member
+      const duration = punchOutRes.data?.duration_minutes || 0
+
+      setLastScan({
+        id: Date.now(),
+        council_id: member.council_id,
+        name: member.name,
+        committee: member.committee,
+        status: "completed",
+        punch_in: member.punch_in,
+        punch_out: member.punch_out,
+        duration_minutes: duration,
+      })
+
+      setSuccess(`✅ ${member.name} PUNCHED OUT! Duration: ${duration} minutes`)
+      resetMessages(5000)
+
+      if (!isPublicKiosk && token) await loadTodayAttendance()
+    } catch (err: any) {
+      const msg = err?.response?.data?.message || err.message
+
+      // ✅ Backend says 30-min rule
+      if (String(msg).toLowerCase().includes("need to work")) {
+        setError("⏳ " + msg)
+        resetMessages(6000)
+        return
+      }
+
+      setError("❌ " + String(msg || "Punch-out failed"))
+      resetMessages()
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  // ==========================================================
+  // ✅ PUBLIC KIOSK UI
+  // ==========================================================
+  if (isPublicKiosk) {
+    return (
+      <div className="attendance-container kiosk">
+        <header className="topbar">
+          <div className="topbar-left">
+            <Fingerprint className="topbar-icon" />
             <div>
-              <h1>Mark Attendance</h1>
-              <p>Biometric attendance recording</p>
+              <h1>Attendance Kiosk</h1>
+              <p>Scan fingerprint to punch in/out</p>
             </div>
           </div>
-          <div className="header-actions">
-            <span>👤 {adminName}</span>
-            <button onClick={onNavigateBack} className="btn btn-secondary">
-              ← Back
-            </button>
-            <button onClick={onLogout} className="btn btn-logout">
-              🚪 Logout
-            </button>
+
+          <div className={`device-pill ${deviceConnected ? "ok" : "bad"}`}>
+            {deviceConnected ? "✅ Device Connected" : "❌ Device Disconnected"}
+            {!deviceConnected && (
+              <button className="mini-btn" onClick={checkDeviceStatus}>
+                <RefreshCw size={16} /> Retry
+              </button>
+            )}
           </div>
-        </div>
+        </header>
 
-        {/* Device Status */}
-        <div className={`device-status ${deviceConnected ? 'connected' : 'disconnected'}`}>
-          <div className="status-indicator"></div>
-          <span>{deviceConnected ? '✓ Device Connected' : '✗ Device Disconnected'}</span>
-          {!deviceConnected && (
-            <button onClick={checkDeviceStatus} className="btn btn-small">
-              🔄 Retry
-            </button>
-          )}
-        </div>
-      </header>
-
-      <div className="attendance-content">
-        {/* Control Panel */}
-        <div className="control-panel">
-          <div className="system-status">
-            <span className={`status-badge ${isActive ? 'active' : 'inactive'}`}>
-              {isActive ? '🟢 SYSTEM ACTIVE' : '🔴 SYSTEM INACTIVE'}
-            </span>
-          </div>
-
-          <div className="control-buttons">
+        <main className="content">
+          <div className="system-controls">
             {!isActive ? (
               <button
+                className="action-btn success"
                 onClick={handleStartAttendance}
                 disabled={!deviceConnected}
-                className="btn btn-success btn-large"
               >
                 ▶ Start Attendance
               </button>
             ) : (
-              <button
-                onClick={handleStopAttendance}
-                className="btn btn-danger btn-large"
-              >
+              <button className="action-btn danger" onClick={handleStopAttendance}>
                 ⏹ Stop Attendance
               </button>
             )}
           </div>
+
+          {error && (
+            <div className="alert error">
+              <AlertCircle size={20} /> <span>{error}</span>
+            </div>
+          )}
+
+          {success && (
+            <div className="alert success">
+              <CheckCircle size={20} /> <span>{success}</span>
+            </div>
+          )}
+
+          <section className="scanner-area">
+            <div
+              className={`scanner-box ${scanning ? "scanning" : ""} ${!isActive ? "inactive" : ""}`}
+              onClick={handleScanFingerprint}
+            >
+              {scanning ? (
+                <>
+                  <div className="pulse">
+                    <Fingerprint size={140} />
+                  </div>
+                  <h2>Scanning...</h2>
+                  <p>Keep finger still on sensor</p>
+                </>
+              ) : (
+                <>
+                  <Fingerprint size={140} />
+                  <h2>{isActive ? "Tap to Scan" : "Start system to scan"}</h2>
+                  <p>{isActive ? "Ready for punch in/out" : "System inactive"}</p>
+                </>
+              )}
+            </div>
+          </section>
+
+          {lastScan && (
+            <div className="last-card">
+              <h3>✅ Last Record</h3>
+
+              <div className="row">
+                <span className="label">Name</span>
+                <span className="value">{lastScan.name}</span>
+              </div>
+
+              <div className="row">
+                <span className="label">Committee</span>
+                <span className="value">{lastScan.committee}</span>
+              </div>
+
+              <div className="row">
+                <span className="label">Status</span>
+                <span className={`value badge ${lastScan.status}`}>
+                  {lastScan.status === "punched_in" ? "📍 PUNCH IN" : "✅ PUNCH OUT"}
+                </span>
+              </div>
+
+              {typeof lastScan.duration_minutes === "number" && lastScan.duration_minutes > 0 && (
+                <div className="row">
+                  <span className="label">Duration</span>
+                  <span className="value">{lastScan.duration_minutes} mins</span>
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
+    )
+  }
+
+  // ==========================================================
+  // ✅ ADMIN MODE UI
+  // ==========================================================
+  return (
+    <div className="attendance-container admin">
+      <header className="topbar">
+        <div className="topbar-left">
+          <Fingerprint className="topbar-icon" />
+          <div>
+            <h1>Mark Attendance</h1>
+            <p>Biometric attendance recording</p>
+          </div>
+        </div>
+
+        <div className="topbar-right">
+          <span className="admin-name">👤 {adminName}</span>
+          <button className="mini-btn" onClick={onNavigateBack}>
+            ← Back
+          </button>
+          <button className="mini-btn logout" onClick={onLogout}>
+            🚪 Logout
+          </button>
+        </div>
+      </header>
+
+      <div className={`device-banner ${deviceConnected ? "ok" : "bad"}`}>
+        <span>{deviceConnected ? "✅ Device Connected" : "❌ Device Disconnected"}</span>
+        {!deviceConnected && (
+          <button className="mini-btn" onClick={checkDeviceStatus}>
+            <RefreshCw size={16} /> Retry
+          </button>
+        )}
+      </div>
+
+      <main className="content">
+        <div className="system-controls">
+          <div className={`system-pill ${isActive ? "on" : "off"}`}>
+            {isActive ? "🟢 SYSTEM ACTIVE" : "🔴 SYSTEM INACTIVE"}
+          </div>
+
+          {!isActive ? (
+            <button
+              className="action-btn success"
+              onClick={handleStartAttendance}
+              disabled={!deviceConnected}
+            >
+              ▶ Start Attendance
+            </button>
+          ) : (
+            <button className="action-btn danger" onClick={handleStopAttendance}>
+              ⏹ Stop Attendance
+            </button>
+          )}
         </div>
 
         {error && (
-          <div className="alert alert-error">
-            <AlertCircle size={20} />
-            <span>{error}</span>
+          <div className="alert error">
+            <AlertCircle size={20} /> <span>{error}</span>
           </div>
         )}
 
         {success && (
-          <div className="alert alert-success">
-            <CheckCircle size={20} />
-            <span>{success}</span>
+          <div className="alert success">
+            <CheckCircle size={20} /> <span>{success}</span>
           </div>
         )}
 
-        {/* Fingerprint Scanner */}
-        <div className="scanner-section">
-          <div 
-            className={`fingerprint-scanner ${scanning ? 'scanning' : ''} ${!isActive ? 'inactive' : ''}`}
+        <section className="scanner-area">
+          <div
+            className={`scanner-box ${scanning ? "scanning" : ""} ${!isActive ? "inactive" : ""}`}
             onClick={handleScanFingerprint}
           >
             {scanning ? (
               <>
-                <div className="scanner-pulse">
-                  <Fingerprint size={100} />
+                <div className="pulse">
+                  <Fingerprint size={110} />
                 </div>
-                <p className="scanner-text">Scanning fingerprint...</p>
-                <p className="scanner-subtext">Keep your finger on the sensor</p>
+                <h2>Scanning...</h2>
+                <p>Keep finger still on sensor</p>
               </>
             ) : (
               <>
-                <Fingerprint size={100} />
-                <p className="scanner-text">
-                  {isActive ? 'Click to scan fingerprint' : 'Start system to scan'}
-                </p>
-                <p className="scanner-subtext">
-                  {isActive ? 'Or press any key' : 'System inactive'}
-                </p>
+                <Fingerprint size={110} />
+                <h2>{isActive ? "Click to Scan" : "Start system to scan"}</h2>
+                <p>{isActive ? "Ready" : "System inactive"}</p>
               </>
             )}
           </div>
-        </div>
+        </section>
 
-        {/* Last Scan Result */}
         {lastScan && (
-          <div className="last-scan-card">
+          <div className="last-card">
             <h3>✅ Last Attendance Record</h3>
-            <div className="scan-details">
-              <div className="detail-item">
-                <span className="label">Council ID:</span>
-                <span className="value">{lastScan.councilId}</span>
-              </div>
-              <div className="detail-item">
-                <span className="label">Name:</span>
-                <span className="value">{lastScan.name}</span>
-              </div>
-              <div className="detail-item">
-                <span className="label">Committee:</span>
-                <span className="value">{lastScan.committee}</span>
-              </div>
-              <div className="detail-item">
-                <span className="label">Status:</span>
-                <span className={`value status-${lastScan.status}`}>
-                  {lastScan.status === 'punched_in' ? '📍 PUNCH IN' : '🚪 PUNCH OUT'}
-                </span>
-              </div>
-              <div className="detail-item">
-                <span className="label">Time:</span>
-                <span className="value">{lastScan.timestamp}</span>
-              </div>
+
+            <div className="row">
+              <span className="label">Name</span>
+              <span className="value">{lastScan.name}</span>
             </div>
+
+            <div className="row">
+              <span className="label">Committee</span>
+              <span className="value">{lastScan.committee}</span>
+            </div>
+
+            <div className="row">
+              <span className="label">Status</span>
+              <span className={`value badge ${lastScan.status}`}>
+                {lastScan.status === "punched_in" ? "✅ IN" : "🚪 OUT"}
+              </span>
+            </div>
+
+            {typeof lastScan.duration_minutes === "number" && lastScan.duration_minutes > 0 && (
+              <div className="row">
+                <span className="label">Duration</span>
+                <span className="value">{lastScan.duration_minutes} mins</span>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Today's Attendance List */}
-        <div className="attendance-list-section">
-          <div className="list-header">
-            <h3>📋 Today's Attendance Records</h3>
-            <button 
-              onClick={loadTodayAttendance} 
-              className="btn btn-small"
-              disabled={loadingRecords}
-            >
-              🔄 Refresh
+        <section className="live-list">
+          <div className="live-header">
+            <h3>📋 Today's Live Attendance</h3>
+            <button className="mini-btn" onClick={loadTodayAttendance} disabled={loadingRecords}>
+              <RefreshCw size={16} /> {loadingRecords ? "Loading..." : "Refresh"}
             </button>
           </div>
 
           {loadingRecords ? (
-            <div className="loading-state">
-              <Loader className="spinner" />
+            <div className="loading">
+              <Loader className="spin" />
               <p>Loading records...</p>
             </div>
           ) : todayAttendance.length === 0 ? (
-            <div className="empty-state">
-              <p>No attendance recorded yet today</p>
+            <div className="empty">
+              <p>No one is currently punched-in today.</p>
             </div>
           ) : (
-            <div className="attendance-records">
-              {todayAttendance.map((record, index) => (
-                <div key={index} className="attendance-record">
-                  <div className="record-avatar">
-                    {record.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="record-info">
-                    <p className="record-name">{record.name}</p>
-                    <p className="record-meta">
-                      {record.councilId} • {record.committee}
+            <div className="records">
+              {todayAttendance.map((r) => (
+                <div key={r.id} className="record">
+                  <div className="avatar">{r.name?.charAt(0)?.toUpperCase() || "?"}</div>
+                  <div className="info">
+                    <p className="name">{r.name}</p>
+                    <p className="meta">
+                      {r.council_id} • {r.committee}
                     </p>
                   </div>
-                  <div className="record-details">
-                    <span className={`status-badge ${record.status}`}>
-                      {record.status === 'punched_in' ? '✅ IN' : '🚪 OUT'}
-                    </span>
-                    <span className="record-time">{record.timestamp}</span>
+                  <div className="right">
+                    <span className="pill in">✅ IN</span>
+                    <span className="mins">{r.duration_minutes || 0} min</span>
                   </div>
                 </div>
               ))}
             </div>
           )}
-        </div>
-      </div>
+        </section>
+      </main>
     </div>
-  );
+  )
 }

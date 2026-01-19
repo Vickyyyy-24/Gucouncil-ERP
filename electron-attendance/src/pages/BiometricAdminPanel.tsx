@@ -436,6 +436,7 @@ export default function BiometricAdminPanel({
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [deviceConnected, setDeviceConnected] = useState(false);
+  const [currentTemplate, setCurrentTemplate] = useState<string | null>(null);
 
   const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:5005';
 
@@ -444,7 +445,8 @@ export default function BiometricAdminPanel({
   const checkDeviceStatus = useCallback(async () => {
     try {
       const result = await (window as any).electronAPI?.biometric?.getStatus?.();
-      setDeviceConnected(!!result?.connected);
+      // Ensure connected is always a boolean
+      setDeviceConnected(result?.connected === true);
     } catch (err) {
       setDeviceConnected(false);
     }
@@ -456,7 +458,7 @@ export default function BiometricAdminPanel({
       const response = await axios.get(`${backendUrl}/api/admin/all-members`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setMembers(response.data);
+      setMembers(Array.isArray(response.data) ? response.data : []);
     } catch (err) {
       setError('Could not sync member database');
     } finally {
@@ -468,7 +470,7 @@ export default function BiometricAdminPanel({
   useEffect(() => {
     loadMembers();
     checkDeviceStatus();
-    const interval = setInterval(checkDeviceStatus, 3000); // Poll hardware every 3s
+    const interval = setInterval(checkDeviceStatus, 3000);
     return () => clearInterval(interval);
   }, [loadMembers, checkDeviceStatus]);
 
@@ -480,7 +482,6 @@ export default function BiometricAdminPanel({
   const handleStartRegistration = (member: Member) => {
     if (!deviceConnected) {
       setError('Scanner disconnected. Check USB connection.');
-      // Auto-clear error
       setTimeout(() => setError(''), 3000);
       return;
     }
@@ -488,6 +489,7 @@ export default function BiometricAdminPanel({
     setScanCount(0);
     setError('');
     setSuccess('');
+    setCurrentTemplate(null);
   };
 
   const handleScanFingerprint = async () => {
@@ -497,21 +499,22 @@ export default function BiometricAdminPanel({
       setScanning(true);
       setError('');
 
-      // 
-
       const result = await (window as any).electronAPI?.biometric?.capture?.({
         councilId: selectedMember.council_id,
         purpose: 'registration'
       });
 
-      if (!result?.success) {
+      if (!result?.success || !result?.template) {
         setError(result?.error || 'Capture failed. Lift finger and try again.');
         return;
       }
 
+      // Store template and increment counter
+      setCurrentTemplate(result.template);
       setScanCount(prev => {
         const newCount = prev + 1;
         if (newCount >= 3) {
+          // Use result.template directly instead of relying on state
           handleRegisterBiometric(result.template, newCount);
         } else {
           setSuccess(`Scan ${newCount}/3 captured successfully.`);
@@ -526,7 +529,7 @@ export default function BiometricAdminPanel({
   };
 
   const handleRegisterBiometric = async (fingerprintTemplate: string, scans: number) => {
-    if (!selectedMember) return;
+    if (!selectedMember || !fingerprintTemplate) return;
 
     try {
       setScanning(true);
@@ -542,12 +545,12 @@ export default function BiometricAdminPanel({
 
       setSuccess(`Success! ${selectedMember.name} is now enrolled.`);
       
-      // Close modal after delay
       setTimeout(() => {
         setSelectedMember(null);
         setScanCount(0);
         setSuccess('');
-        loadMembers(); // Refresh list to show updated status if you have a status field
+        setCurrentTemplate(null);
+        loadMembers();
       }, 2000);
       
     } catch (err: any) {
@@ -615,7 +618,7 @@ export default function BiometricAdminPanel({
               />
             </div>
             <button onClick={loadMembers} className="btn btn-secondary" disabled={loading}>
-              <RefreshCw size={18} className={loading ? 'spinner-icon' : ''} />
+              <RefreshCw size={18} />
               Sync Data
             </button>
           </div>
@@ -674,7 +677,7 @@ export default function BiometricAdminPanel({
               <div className="modal-body">
                 <div className={`scanner-visual ${scanning ? 'scanning' : ''}`}>
                   <div className="scanner-icon-wrap">
-                    {scanning ? <Loader size={64} className="spinner-icon" /> : <Fingerprint size={64} />}
+                    {scanning ? <Loader size={64} /> : <Fingerprint size={64} />}
                   </div>
                   <p style={{ marginTop: 16, color: '#4B5563', fontWeight: 500 }}>
                     {scanning ? 'Capturing...' : 'Ready to Scan'}
@@ -695,8 +698,8 @@ export default function BiometricAdminPanel({
                 </div>
 
                 <div className="modal-feedback">
-                  {error && <div className="msg-box error"><AlertCircle size={18}/> {error}</div>}
-                  {success && <div className="msg-box success"><CheckCircle size={18}/> {success}</div>}
+                  {error && <div className="msg-box error"><AlertCircle size={18} /> {error}</div>}
+                  {success && <div className="msg-box success"><CheckCircle size={18} /> {success}</div>}
                 </div>
 
                 <div className="button-group" style={{ marginTop: 24 }}>

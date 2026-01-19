@@ -97,3 +97,133 @@ declare global {
 }
 
 export {};
+export {};
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      biometric: {
+        getStatus: () => Promise<{ connected: boolean; device?: string }>;
+
+        // ✅ capture works for BOTH registration + attendance
+        capture: (opts: {
+          purpose: "registration" | "attendance";
+          councilId?: string;
+        }) => Promise<{
+          success: boolean;
+          template?: string;
+          hash?: string;
+          quality?: number;
+          error?: string;
+        }>;
+
+        // ✅ load enrolled templates into Electron memory
+        loadEnrolled?: (
+          token: string
+        ) => Promise<{ success: boolean; count?: number; loadedAt?: string; error?: string }>;
+
+        // ✅ attendance match helper
+        matchAttendance?: () => Promise<
+          | {
+              success: true;
+              userId: number;
+              councilId: string;
+              name: string;
+              committee: string;
+              score?: number;
+            }
+          | { success: false; error: string }
+        >;
+      };
+
+      app?: {
+        getEnv?: () => Promise<any>;
+        getVersion?: () => Promise<string>;
+      };
+    };
+  }
+}
+export {};
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      biometric: {
+        getStatus: () => Promise<{ connected: boolean; device?: string }>;
+
+        capture: (opts?: { purpose?: string }) => Promise<{
+          success: boolean;
+          template?: string;
+          quality?: number;
+          error?: string;
+        }>;
+
+        loadEnrolled: (token: string) => Promise<{
+          success: boolean;
+          count?: number;
+          loadedAt?: string;
+          error?: string;
+        }>;
+
+        match: (template: string) => Promise<{
+          success: boolean;
+          matched?: boolean;
+          userId?: number;
+          councilId?: string;
+          name?: string;
+          committee?: string;
+          score?: number;
+          error?: string;
+        }>;
+      };
+    };
+  }
+}
+export {};
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      biometric: {
+        getStatus: () => Promise<{
+          connected: boolean;
+          device?: string;
+          isMock?: boolean;
+          devicesFound?: number;
+          activeDevice?: any;
+          enrolledCount?: number;
+          enrolledLoadedAt?: string | null;
+        }>;
+
+        capture: (opts?: { purpose?: string; councilId?: string }) => Promise<{
+          success: boolean;
+          template?: string;
+          error?: string;
+          quality?: number;
+        }>;
+
+        loadEnrolled: (token: string) => Promise<{
+          success: boolean;
+          count?: number;
+          loadedAt?: string;
+          error?: string;
+        }>;
+
+        match: (template: string) => Promise<{
+          success: boolean;
+          matched?: boolean;
+          councilId?: string;
+          name?: string;
+          committee?: string;
+          score?: number;
+          error?: string;
+        }>;
+      };
+
+      app: {
+        getEnv: () => Promise<any>;
+        getVersion: () => Promise<string>;
+      };
+    };
+  }
+}

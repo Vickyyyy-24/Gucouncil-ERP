@@ -1,0 +1,12 @@
+ignoredBuiltDependencies:
+  - edge-js
+
+onlyBuiltDependencies:
+  - '@serialport/bindings-cpp'
+  - core-js
+  - core-js-pure
+  - electron
+  - es5-ext
+  - node-ffi
+  - sharp
+  - usb

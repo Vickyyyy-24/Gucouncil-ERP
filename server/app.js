@@ -12,6 +12,7 @@ const generateCommitteePdf = require('./utils/generateCommitteePdf')
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
+
 // ============================================
 // SYSTEM LOGGING UTILITY
 // ============================================
@@ -156,8 +157,51 @@ const authorizeRole = (...roles) => {
   };
 };
 
-// Routes
+async function findMatchedUserByFingerprint(pool, fingerprintTemplate) {
+  const result = await pool.query(`
+    SELECT 
+      br.user_id,
+      br.council_id,
+      br.fingerprint_template,
+      up.name,
+      up.committee_name
+    FROM biometric_registrations br
+    JOIN user_profiles up ON up.council_id = br.council_id
+    WHERE br.is_active = true
+  `);
 
+  if (result.rows.length === 0) return null;
+
+  let bestMatch = null;
+  let bestScore = 0;
+
+  for (const row of result.rows) {
+    const score = calculateSimilarity(fingerprintTemplate, row.fingerprint_template);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = row;
+    }
+  }
+
+  if (!bestMatch || bestScore < 85) return null;
+
+  return {
+    userId: bestMatch.user_id,
+    councilId: bestMatch.council_id,
+    name: bestMatch.name,
+    committee: bestMatch.committee_name,
+    matchScore: bestScore
+  };
+}
+const kioskLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/attendance/kiosk', kioskLimiter);
+// Routes
 // Authentication Routes
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
@@ -2313,7 +2357,539 @@ app.get(
 // ============================================
 // BIOMETRIC ROUTES
 // ============================================
-// Admin marks attendance for a member after biometric verification
+
+
+// ============================================
+// 2. PUBLIC KIOSK PUNCH-IN (No auth required)
+// ============================================
+app.post('/api/attendance/kiosk/punch-in', async (req, res) => {
+  try {
+    const { fingerprintTemplate } = req.body;
+
+    if (!fingerprintTemplate) {
+      return res.status(400).json({ success: false, message: "fingerprintTemplate required" });
+    }
+
+    const matchedUser = await findMatchedUserByFingerprint(pool, fingerprintTemplate);
+    if (!matchedUser) {
+      return res.status(401).json({ success: false, message: "Fingerprint not recognized" });
+    }
+
+    const existing = await pool.query(`
+      SELECT id, punch_in
+      FROM attendance_logs
+      WHERE user_id = $1
+        AND DATE(punch_in) = CURRENT_DATE
+        AND status = 'punched_in'
+      LIMIT 1
+    `, [matchedUser.userId]);
+
+    if (existing.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Already punched in. Please punch out first.",
+        existing_punch_in: existing.rows[0].punch_in
+      });
+    }
+
+    const inserted = await pool.query(`
+      INSERT INTO attendance_logs (user_id, punch_in, status, biometric_verified, biometric_quality)
+      VALUES ($1, NOW(), 'punched_in', true, $2)
+      RETURNING *
+    `, [matchedUser.userId, matchedUser.matchScore]);
+
+    const attendance = inserted.rows[0];
+
+    emitAttendanceUpdate({
+      type: "punch_in",
+      userId: matchedUser.userId,
+      councilId: matchedUser.councilId,
+      name: matchedUser.name,
+      committee: matchedUser.committee,
+      attendance,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      message: "Punch-in recorded",
+      member: {
+        userId: matchedUser.userId,
+        council_id: matchedUser.councilId,
+        name: matchedUser.name,
+        committee: matchedUser.committee,
+        punch_in: attendance.punch_in
+      }
+    });
+
+  } catch (err) {
+    console.error("kiosk punch-in error:", err);
+    return res.status(500).json({ success: false, message: "Failed punch-in" });
+  }
+});
+
+// ============================================
+// 3. PUBLIC KIOSK PUNCH-OUT (No auth required)
+// ============================================
+app.post('/api/attendance/kiosk/punch-out', async (req, res) => {
+  try {
+    const { fingerprintTemplate } = req.body;
+
+    if (!fingerprintTemplate) {
+      return res.status(400).json({ success: false, message: "fingerprintTemplate required" });
+    }
+
+    const matchedUser = await findMatchedUserByFingerprint(pool, fingerprintTemplate);
+    if (!matchedUser) {
+      return res.status(401).json({ success: false, message: "Fingerprint not recognized" });
+    }
+
+    const active = await pool.query(`
+      SELECT id, punch_in
+      FROM attendance_logs
+      WHERE user_id = $1
+        AND DATE(punch_in) = CURRENT_DATE
+        AND status = 'punched_in'
+      LIMIT 1
+    `, [matchedUser.userId]);
+
+    if (active.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No active punch-in found"
+      });
+    }
+
+    const punchInTime = new Date(active.rows[0].punch_in);
+    const now = new Date();
+    const durationMinutes = Math.floor((now - punchInTime) / 60000);
+
+    if (durationMinutes < 30) {
+      return res.status(400).json({
+        success: false,
+        message: `Need to work 30 minutes. Current: ${durationMinutes}`,
+        remaining_minutes: 30 - durationMinutes
+      });
+    }
+
+    const updated = await pool.query(`
+      UPDATE attendance_logs
+      SET punch_out = NOW(), status = 'completed', biometric_verified = true
+      WHERE id = $1
+      RETURNING *
+    `, [active.rows[0].id]);
+
+    const attendance = updated.rows[0];
+
+    emitAttendanceUpdate({
+      type: "punch_out",
+      userId: matchedUser.userId,
+      councilId: matchedUser.councilId,
+      name: matchedUser.name,
+      committee: matchedUser.committee,
+      attendance,
+      timestamp: new Date().toISOString(),
+    });
+
+    return res.json({
+      success: true,
+      message: "Punch-out recorded",
+      duration_minutes: durationMinutes,
+      member: {
+        userId: matchedUser.userId,
+        council_id: matchedUser.councilId,
+        name: matchedUser.name,
+        committee: matchedUser.committee,
+        punch_in: attendance.punch_in,
+        punch_out: attendance.punch_out
+      }
+    });
+
+  } catch (err) {
+    console.error("kiosk punch-out error:", err);
+    return res.status(500).json({ success: false, message: "Failed punch-out" });
+  }
+});
+
+// ============================================
+// 4. BIOMETRIC DETAILED MATCHING
+// ============================================
+app.get('/api/biometrics/enrolled', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        br.user_id,
+        br.council_id,
+        br.fingerprint_template,
+        up.name,
+        up.committee_name
+      FROM biometric_registrations br
+      JOIN user_profiles up ON up.council_id = br.council_id
+      WHERE br.is_active = true
+      ORDER BY up.name
+    `);
+
+    res.json({
+      success: true,
+      enrolled: result.rows
+    });
+  } catch (err) {
+    console.error('Enrolled biometrics error:', err);
+    res.status(500).json({ success: false, message: 'Failed to load enrolled biometrics' });
+  }
+});
+// ============================================
+// 5. TODAY'S LIVE ATTENDANCE
+// ============================================
+app.get('/api/attendance/today/live', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        u.council_id,
+        up.name,
+        up.committee_name,
+        al.punch_in,
+        al.biometric_quality,
+        EXTRACT(EPOCH FROM (NOW() - al.punch_in)) / 60 AS duration_minutes
+      FROM attendance_logs al
+      JOIN users u ON u.id = al.user_id
+      JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE DATE(al.punch_in) = CURRENT_DATE
+        AND al.status = 'punched_in'
+      ORDER BY al.punch_in DESC
+    `);
+
+    const presentCount = result.rows.length;
+
+    // Get total members
+    const totalResult = await pool.query(`
+      SELECT COUNT(DISTINCT u.id) as total FROM users u WHERE u.is_active = true
+    `);
+
+    const totalMembers = parseInt(totalResult.rows[0].total);
+    const attendanceRate = totalMembers > 0 
+      ? Math.round((presentCount / totalMembers) * 100) 
+      : 0;
+
+    res.json({
+      success: true,
+      present: result.rows.map(row => ({
+        council_id: row.council_id,
+        name: row.name,
+        committee: row.committee_name,
+        punch_in: row.punch_in,
+        duration_minutes: Math.floor(row.duration_minutes),
+        biometric_quality: row.biometric_quality
+      })),
+      total_present: presentCount,
+      total_members: totalMembers,
+      attendance_rate: attendanceRate,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Live attendance error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch live attendance',
+      error: error.message 
+    });
+  }
+});
+
+// ============================================
+// 6. VALIDATE PUNCH-OUT (30-min rule)
+// ============================================
+app.post('/api/attendance/validate/punch-out', async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId required",
+      });
+    }
+
+    // ✅ Check if user has active biometric enrolled
+    const bioResult = await pool.query(`
+      SELECT id, user_id
+      FROM biometric_registrations
+      WHERE user_id = $1 AND is_active = true
+      LIMIT 1
+    `, [userId]);
+
+    if (bioResult.rows.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: "User is not biometric enrolled",
+      });
+    }
+
+    // ✅ Find today's punched_in record
+    const checkResult = await pool.query(`
+      SELECT id, punch_in
+      FROM attendance_logs
+      WHERE user_id = $1
+        AND DATE(punch_in) = CURRENT_DATE
+        AND status = 'punched_in'
+      LIMIT 1
+    `, [userId]);
+
+    if (checkResult.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No active punch-in found",
+        valid: false,
+      });
+    }
+
+    const punchInTime = new Date(checkResult.rows[0].punch_in);
+    const now = new Date();
+    const durationMinutes = Math.floor((now - punchInTime) / (1000 * 60));
+
+    // ✅ 30 min rule
+    if (durationMinutes < 30) {
+      return res.json({
+        success: true,
+        valid: false,
+        duration_minutes: durationMinutes,
+        remaining_minutes: 30 - durationMinutes,
+        message: `Need to work ${30 - durationMinutes} more minutes`,
+      });
+    }
+
+    return res.json({
+      success: true,
+      valid: true,
+      duration_minutes: durationMinutes,
+      message: "Ready to punch out",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Punch-out validation error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Validation failed",
+      error: error.message,
+    });
+  }
+});
+
+
+app.post('/api/attendance/kiosk/check-status', async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        message: "userId required"
+      });
+    }
+
+    // ✅ Get basic user + profile info
+    const userRes = await pool.query(`
+      SELECT 
+        u.id,
+        u.council_id,
+        up.name,
+        up.committee_name
+      FROM users u
+      LEFT JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE u.id = $1
+      LIMIT 1
+    `, [userId]);
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found"
+      });
+    }
+
+    const member = userRes.rows[0];
+
+    // ✅ check today latest record
+    const check = await pool.query(`
+      SELECT id, status, punch_in, punch_out
+      FROM attendance_logs
+      WHERE user_id = $1
+        AND DATE(punch_in) = CURRENT_DATE
+      ORDER BY punch_in DESC
+      LIMIT 1
+    `, [userId]);
+
+    if (check.rows.length === 0) {
+      return res.json({
+        success: true,
+        status: "not_punched",
+        member: {
+          userId: member.id,
+          councilId: member.council_id,
+          name: member.name || "Unknown",
+          committee: member.committee_name || "-"
+        }
+      });
+    }
+
+    const record = check.rows[0];
+
+    return res.json({
+      success: true,
+      status: record.status === "punched_in" ? "punched_in" : "completed",
+      member: {
+        userId: member.id,
+        councilId: member.council_id,
+        name: member.name || "Unknown",
+        committee: member.committee_name || "-"
+      },
+      attendance: record
+    });
+
+  } catch (err) {
+    console.error("check-status error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
+  }
+});
+
+// ============================================
+// 8. CHECK IF USER IS ENROLLED
+// ============================================
+app.get('/api/biometrics/check/:councilId', async (req, res) => {
+  try {
+    const { councilId } = req.params;
+
+    if (!councilId) {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Council ID required' 
+      });
+    }
+
+    const result = await pool.query(`
+      SELECT 
+        id,
+        council_id,
+        is_active,
+        registered_at,
+        updated_at
+      FROM biometric_registrations
+      WHERE council_id = $1
+    `, [councilId]);
+
+    if (result.rows.length === 0) {
+      return res.json({
+        success: true,
+        enrolled: false,
+        council_id: councilId,
+        message: 'User not enrolled'
+      });
+    }
+
+    const bio = result.rows[0];
+
+    res.json({
+      success: true,
+      enrolled: true,
+      council_id: bio.council_id,
+      is_active: bio.is_active,
+      registered_at: bio.registered_at,
+      last_updated: bio.updated_at,
+      ready_for_attendance: bio.is_active,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Check enrollment error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Check failed',
+      error: error.message 
+    });
+  }
+});
+
+// ============================================
+// 9. TODAY'S ATTENDANCE SUMMARY
+// ============================================
+app.get('/api/attendance/today/summary', authenticateToken, authorizeRole('admin'), async (req, res) => {
+  try {
+    // Get total members
+    const totalResult = await pool.query(`
+      SELECT COUNT(*) as count FROM users WHERE is_active = true
+    `);
+    const totalMembers = parseInt(totalResult.rows[0].count);
+
+    // Get members punched in
+    const presentResult = await pool.query(`
+      SELECT COUNT(DISTINCT user_id) as count FROM attendance_logs
+      WHERE DATE(punch_in) = CURRENT_DATE
+        AND status = 'punched_in'
+    `);
+    const presentCount = parseInt(presentResult.rows[0].count);
+
+    // Get members completed
+    const completedResult = await pool.query(`
+      SELECT COUNT(DISTINCT user_id) as count FROM attendance_logs
+      WHERE DATE(punch_in) = CURRENT_DATE
+        AND status = 'completed'
+        AND punch_out IS NOT NULL
+    `);
+    const completedCount = parseInt(completedResult.rows[0].count);
+
+    const absentCount = totalMembers - presentCount - completedCount;
+    const attendanceRate = totalMembers > 0 
+      ? Math.round(((presentCount + completedCount) / totalMembers) * 100) 
+      : 0;
+
+    res.json({
+      success: true,
+      date: new Date().toISOString().split('T')[0],
+      total_members: totalMembers,
+      present_count: presentCount,
+      completed_count: completedCount,
+      absent_count: Math.max(0, absentCount),
+      attendance_rate: attendanceRate,
+      summary: {
+        punched_in: presentCount,
+        finished_work: completedCount,
+        not_present: Math.max(0, absentCount)
+      },
+      last_update: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Summary error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to fetch summary',
+      error: error.message 
+    });
+  }
+});
+
+// ============================================
+// HELPER FUNCTION: Calculate Similarity Score
+// ============================================
+function calculateSimilarity(str1, str2) {
+  if (!str1 || !str2) return 0;
+  
+  const len1 = str1.length;
+  const len2 = str2.length;
+  const maxLen = Math.max(len1, len2);
+  
+  let matches = 0;
+  for (let i = 0; i < Math.min(len1, len2); i++) {
+    if (str1[i] === str2[i]) matches++;
+  }
+  
+  return Math.round((matches / maxLen) * 100);
+}
+
+// ============================================
+// END OF NEW ENDPOINTS
+// ============================================
 app.post('/api/admin/mark-attendance', authenticateToken, authorizeRole('admin'), async (req, res) => {
   try {
     const { councilId, fingerprintTemplate } = req.body;

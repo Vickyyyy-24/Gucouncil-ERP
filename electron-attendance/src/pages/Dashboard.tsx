@@ -16,6 +16,19 @@ import {
 } from 'lucide-react';
 import '../styles/erp-dashboard.css';
 
+interface DeviceInfo {
+  id: string;
+  vendorName: string;
+  vendorId: string;
+  productId: string;
+  connected: boolean;
+  status: string;
+  captureCount: number;
+  errorCount: number;
+  lastUsed: string | null;
+  isActive: boolean;
+}
+
 interface DashboardProps {
   token: string;
   adminId: string;
@@ -29,10 +42,8 @@ export default function Dashboard({
   onLogout,
   onNavigate
 }: DashboardProps) {
-  const [deviceStatus, setDeviceStatus] = useState<{
-    connected: boolean;
-    device?: string;
-  } | null>(null);
+  const [deviceConnected, setDeviceConnected] = useState(false);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [checkingDevice, setCheckingDevice] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -50,10 +61,18 @@ export default function Dashboard({
   const checkDeviceStatus = async () => {
     try {
       setCheckingDevice(true);
-      const status = await (window as any).electronAPI?.biometric?.getStatus?.();
-      setDeviceStatus(status);
+      const result = await (window as any).electronAPI?.biometric?.getStatus?.();
+      
+      // Extract and set only the necessary values
+      const isConnected = result?.connected === true;
+      const device = result?.device || null;
+      
+      setDeviceConnected(isConnected);
+      setDeviceInfo(device);
     } catch (error) {
       console.error('Error checking device status:', error);
+      setDeviceConnected(false);
+      setDeviceInfo(null);
     } finally {
       setCheckingDevice(false);
     }
@@ -166,13 +185,17 @@ export default function Dashboard({
             <div className="kpi-card">
               <div className="kpi-header">
                 <span className="kpi-title">Device Status</span>
-                <Cpu size={20} className={deviceStatus?.connected ? 'icon-green' : 'icon-red'} />
+                <Cpu size={20} className={deviceConnected ? 'icon-green' : 'icon-red'} />
               </div>
               <div className="kpi-body">
-                <h2 className={deviceStatus?.connected ? 'text-green' : 'text-red'}>
-                  {deviceStatus?.connected ? 'Connected' : 'Offline'}
+                <h2 className={deviceConnected ? 'text-green' : 'text-red'}>
+                  {deviceConnected ? 'Connected' : 'Offline'}
                 </h2>
-                <p>{deviceStatus?.device || 'Scanning for hardware...'}</p>
+                <p>
+                  {deviceConnected && deviceInfo 
+                    ? deviceInfo.vendorName 
+                    : 'No device detected'}
+                </p>
               </div>
             </div>
 
@@ -199,10 +222,10 @@ export default function Dashboard({
                 <h3>Member Enrollment</h3>
                 <p>Register new fingerprint templates to the secure database.</p>
                 <button 
-                  disabled={!deviceStatus?.connected}
+                  disabled={!deviceConnected}
                   onClick={() => onNavigate('biometric-admin')}
                   className="action-btn"
-                  title={!deviceStatus?.connected ? 'Device not connected' : 'Start registration'}
+                  title={!deviceConnected ? 'Device not connected' : 'Start registration'}
                 >
                   Start Registration
                 </button>
@@ -218,10 +241,10 @@ export default function Dashboard({
                 <h3>Attendance Terminal</h3>
                 <p>Launch the high-speed biometric scanning interface.</p>
                 <button 
-                  disabled={!deviceStatus?.connected}
+                  disabled={!deviceConnected}
                   onClick={() => onNavigate('attendance-marking')}
                   className="action-btn"
-                  title={!deviceStatus?.connected ? 'Device not connected' : 'Open terminal'}
+                  title={!deviceConnected ? 'Device not connected' : 'Open terminal'}
                 >
                   Open Terminal
                 </button>

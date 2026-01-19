@@ -13,6 +13,8 @@
     "node-ffi": "^0.5.7",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "ref-array-di": "^1.2.2",
+    "ref-struct-di": "^1.1.1",
     "serialport": "^13.0.0",
     "sharp": "^0.34.5",
     "usb": "^1.9.2"
@@ -34,9 +36,11 @@
   "scripts": {
     "react-start": "react-scripts start",
     "react-build": "react-scripts build",
+    "main": "public/electron.js",
     "electron-start": "electron .",
     "start": "concurrently \"npm run react-start\" \"wait-on http://localhost:5050 && npm run electron-start\"",
     "build": "npm run react-build && electron-builder",
+    "postbuild": "node scripts/copy-sdk.js",
     "dist": "npm run build",
     "pack": "electron-builder --dir"
   },
