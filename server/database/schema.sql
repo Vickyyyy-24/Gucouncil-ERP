@@ -5,6 +5,9 @@ CREATE TABLE IF NOT EXISTS users (
   password VARCHAR(255) NOT NULL,
   role VARCHAR(50) NOT NULL,
   is_active BOOLEAN DEFAULT true,
+  qr_blocked BOOLEAN DEFAULT FALSE,
+  qr_block_reason TEXT,
+  qr_blocked_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -53,7 +56,7 @@ CREATE TABLE IF NOT EXISTS attendance_logs (
   punch_out TIMESTAMP,
   status VARCHAR(50) DEFAULT 'punched_in',
   biometric_verified BOOLEAN DEFAULT false,
-  biometric_quality NUMERIC(3,1),
+  biometric_quality INTEGER,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -126,7 +129,7 @@ CREATE TABLE IF NOT EXISTS biometric_registrations (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   council_id VARCHAR(255) UNIQUE NOT NULL,
-  ADD COLUMN name VARCHAR(255);
+  name VARCHAR(255),
   fingerprint_template TEXT NOT NULL,
   is_active BOOLEAN DEFAULT true,
   registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -134,3 +137,35 @@ CREATE TABLE IF NOT EXISTS biometric_registrations (
   CONSTRAINT unique_user_biometric UNIQUE(user_id)
 );
 
+CREATE TABLE IF NOT EXISTS biometric_enrollments (
+  id SERIAL PRIMARY KEY,
+  user_id VARCHAR(50) NOT NULL,
+  council_id VARCHAR(50) NOT NULL,
+  name VARCHAR(100),
+  committee_name VARCHAR(100),
+  ansi_path TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE IF NOT EXISTS attendance_settings (
+  id INT PRIMARY KEY DEFAULT 1,
+  qr_enabled BOOLEAN DEFAULT TRUE,
+  qr_expiry_seconds INT DEFAULT 15,
+  time_window_enabled BOOLEAN DEFAULT FALSE,
+  start_time TIME DEFAULT '09:00',
+  end_time TIME DEFAULT '18:00',
+  punchout_min_minutes INT DEFAULT 30,
+  updated_by INT NULL,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS qr_scan_events (
+  id BIGSERIAL PRIMARY KEY,
+  jti TEXT UNIQUE NOT NULL,
+  user_id INT NOT NULL,
+  council_id TEXT NOT NULL,
+  scanned_at TIMESTAMP DEFAULT NOW(),
+  kiosk_device_id TEXT NULL,
+  result TEXT NULL
+);

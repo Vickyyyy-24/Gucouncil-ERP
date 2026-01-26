@@ -1,7 +1,9 @@
 require('dotenv').config();
 const http = require('http');
 const app = require('./app');
-const { initSocket } = require('./socket'); // <-- socket setup
+const { initSocket } = require('./socket'); 
+process.env.TZ = "Asia/Kolkata";
+// <-- socket setup
 
 const PORT = Number(process.env.PORT) || 5005;
 

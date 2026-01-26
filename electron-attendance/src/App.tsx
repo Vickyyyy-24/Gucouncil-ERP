@@ -3,8 +3,9 @@ import AdminAuthPage from './pages/AdminAuthPage';
 import Dashboard from './pages/Dashboard';
 import BiometricAdminPanel from './pages/BiometricAdminPanel';
 import AttendanceMarking from './pages/AttendanceMarking';
+import AttendanceMarkingQR from "./pages/AttendanceMarkingQR"
 
-type AppPage = 'auth' | 'dashboard' | 'biometric-admin' | 'attendance-marking' | 'registration' | 'attendance';
+type AppPage = 'auth' | 'dashboard' | 'biometric-admin' | 'attendance-marking' | 'attendance-qr' | 'registration' | 'attendance';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<AppPage>('auth');
@@ -193,6 +194,17 @@ export default function App() {
           isPublicKiosk={false}
         />
       )}
+
+     {currentPage === 'attendance-qr' && token && adminId && (
+  <AttendanceMarkingQR
+    token={token}
+    adminName={adminName}
+    onLogout={handleLogout}
+    onNavigateBack={() => setCurrentPage('dashboard')}
+    isPublicKiosk={false}
+  />
+)}
+
 
       {/* 
         LEGACY OPTIONS (Commented out - uncomment if needed)

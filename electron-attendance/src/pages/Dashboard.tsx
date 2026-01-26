@@ -34,7 +34,7 @@ interface DashboardProps {
   adminId: string;
   adminName: string;
   onLogout: () => void;
-  onNavigate: (page: 'auth' | 'dashboard' | 'biometric-admin' | 'attendance-marking' | 'registration' | 'attendance') => void;
+  onNavigate: (page: 'auth' | 'dashboard' | 'biometric-admin' | 'attendance-marking' | 'attendance-qr' |'registration' | 'attendance') => void;
 }
 
 export default function Dashboard({
@@ -261,13 +261,13 @@ export default function Dashboard({
             <div className="legacy-actions">
               <button 
                 className="legacy-btn"
-                onClick={() => onNavigate('registration')}
+                onClick={() => onNavigate('attendance')}
               >
                 Web Register
               </button>
               <button 
                 className="legacy-btn"
-                onClick={() => onNavigate('attendance')}
+                onClick={() => onNavigate('attendance-qr')}
               >
                 Web Mark
               </button>

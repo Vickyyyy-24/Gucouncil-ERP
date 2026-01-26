@@ -23,6 +23,8 @@ function validateChannel() {
       "biometric:getCachedTemplate",
       "biometric:getStats",
       "biometric:disconnect",
+      "biometric:readAnsiBase64",
+
 
       // ✅ NEW FOR MATCHING SYSTEM
       "biometric:loadEnrolled",
@@ -119,6 +121,9 @@ const biometric = {
   getStats: () => safeInvoke("biometric:getStats"),
   getCachedTemplate: (hash) => safeInvoke("biometric:getCachedTemplate", hash),
   disconnect: () => safeInvoke("biometric:disconnect"),
+  readAnsiBase64: (ansiPath) => safeInvoke("biometric:readAnsiBase64", ansiPath),
+  
+
 
   // ✅ Matching System
   loadEnrolled: (token) => safeInvoke("biometric:loadEnrolled", token),

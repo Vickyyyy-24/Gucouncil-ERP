@@ -35,7 +35,7 @@ export default function SummaryCard({ title, value, variant = 'blue' }: Props) {
   }, [value, circumference])
 
   return (
-    <div className={`relative bg-[#0f172a]/40 border border-blue-500/20 backdrop-blur-md p-5 rounded-2xl flex items-center justify-between group hover:border-blue-400/50 transition-all duration-500 ${activeColor.glow} shadow-lg`}>
+    <div className={`relative bg-[#0f0f0f] border border-blue-500/20 backdrop-blur-md p-5 rounded-2xl flex items-center justify-between group hover:border-blue-400/50 transition-all duration-500 ${activeColor.glow} shadow-lg`}>
       
       {/* TEXT DATA */}
       <div className="flex flex-col">

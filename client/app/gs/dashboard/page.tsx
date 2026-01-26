@@ -8,6 +8,7 @@ import { getSocket } from '@/lib/socket'
 
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
+import UserAttendanceQR from '@/components/common/UserAttendanceQR'
 
 // GS / Member Components
 import GSInsights from '@/components/gs/GSInsights'
@@ -143,6 +144,7 @@ export default function GsDashboard() {
     { id: 'committee_activity', label: 'Committee Activity', icon: 'Activity' },
     { id: 'attendance1', label: 'Attendance Analytics', icon: 'Clock' },
     { id: 'profile', label: 'My Profile', icon: 'UserCircle' },
+    { id: 'qr', label: 'QR Attendance', icon: 'QrCode' },
     { id: 'attendance', label: 'Attendance', icon: 'Clock' },
     { id: 'reports', label: 'Work Reports', icon: 'FileText' },
     { id: 'leaves', label: 'Apply Leave', icon: 'Calendar' },
@@ -161,6 +163,8 @@ export default function GsDashboard() {
         return <AttendanceManagement />
       case 'profile':
         return <MemberProfile />
+      case 'qr':
+        return <UserAttendanceQR />
       case 'attendance':
         return <AttendanceTracker />
       case 'reports':

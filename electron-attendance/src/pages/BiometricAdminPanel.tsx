@@ -17,6 +17,7 @@ import {
 
 // --- Types ---
 interface Member {
+  user_id: number;
   council_id: string;
   name: string;
   committee_name: string;
@@ -36,8 +37,33 @@ declare global {
   interface Window {
     electronAPI?: {
       biometric: {
+        init: () => Promise<any>;
         getStatus: () => Promise<{ connected: boolean; device?: string }>;
-        capture: (opts: { councilId?: string; purpose: string }) => Promise<{ success: boolean; template?: string; error?: string }>;
+        loadEnrolled: (token: string) => Promise<any>;
+
+        capture: (opts: { purpose: string; councilId?: string }) => Promise<{
+  success: boolean;
+  ansiPath?: string;
+  template?: string;
+  quality?: number;
+  error?: string;
+}>;
+        readAnsiBase64: (ansiPath: string) => Promise<{
+  success: boolean
+  ansi_base64?: string
+  error?: string
+}>;
+
+        match: (scannedInput: any) => Promise<{
+          success: boolean;
+          matched?: boolean;
+          score?: number;
+          councilId?: string;
+          userId?: string;
+          name?: string;
+          committee?: string;
+          error?: string;
+        }>;
       };
     };
   }
@@ -432,7 +458,7 @@ export default function BiometricAdminPanel({
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [scanCount, setScanCount] = useState(0);
+  const [scanCount, setScanCount] = useState(1);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [deviceConnected, setDeviceConnected] = useState(false);
@@ -478,6 +504,27 @@ export default function BiometricAdminPanel({
     member.council_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
     member.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+const handleInitBiometric = async () => {
+  try {
+    setLoading(true);
+    setError("");
+    const res = await (window as any).electronAPI?.biometric?.init?.();
+
+    if (!res?.success) {
+      setError("Biometric init failed. Please check device + drivers.");
+      return;
+    }
+
+    setSuccess("✅ Biometric Initialized");
+    setTimeout(() => setSuccess(""), 2000);
+
+    await checkDeviceStatus();
+  } catch {
+    setError("Init failed. Restart application.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleStartRegistration = (member: Member) => {
     if (!deviceConnected) {
@@ -493,72 +540,99 @@ export default function BiometricAdminPanel({
   };
 
   const handleScanFingerprint = async () => {
-    if (!selectedMember) return;
+  if (!selectedMember) return;
 
-    try {
-      setScanning(true);
-      setError('');
+  try {
+    setScanning(true);
+    setError("");
+    setSuccess("");
 
-      const result = await (window as any).electronAPI?.biometric?.capture?.({
-        councilId: selectedMember.council_id,
-        purpose: 'registration'
-      });
+    const result = await (window as any).electronAPI?.biometric?.capture?.({
+      councilId: selectedMember.council_id,
+      purpose: "registration",
+    });
 
-      if (!result?.success || !result?.template) {
-        setError(result?.error || 'Capture failed. Lift finger and try again.');
-        return;
-      }
-
-      // Store template and increment counter
-      setCurrentTemplate(result.template);
-      setScanCount(prev => {
-        const newCount = prev + 1;
-        if (newCount >= 3) {
-          // Use result.template directly instead of relying on state
-          handleRegisterBiometric(result.template, newCount);
-        } else {
-          setSuccess(`Scan ${newCount}/3 captured successfully.`);
-        }
-        return newCount;
-      });
-    } catch (err: any) {
-      setError('Hardware communication error.');
-    } finally {
-      setScanning(false);
+    if (!result?.success) {
+      setError(result?.error || "Capture failed. Lift finger and try again.");
+      return;
     }
-  };
 
-  const handleRegisterBiometric = async (fingerprintTemplate: string, scans: number) => {
-    if (!selectedMember || !fingerprintTemplate) return;
-
-    try {
-      setScanning(true);
-      await axios.post(
-        `${backendUrl}/api/biometrics/register`,
-        {
-          councilId: selectedMember.council_id,
-          fingerprintTemplate: fingerprintTemplate,
-          name: selectedMember.name
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      setSuccess(`Success! ${selectedMember.name} is now enrolled.`);
-      
-      setTimeout(() => {
-        setSelectedMember(null);
-        setScanCount(0);
-        setSuccess('');
-        setCurrentTemplate(null);
-        loadMembers();
-      }, 2000);
-      
-    } catch (err: any) {
-      setError('Server refused registration. Try again.');
-    } finally {
-      setScanning(false);
+    if (!result?.ansiPath) {
+      setError("ANSI file not generated. Please re-scan (hardware issue).");
+      return;
     }
-  };
+
+    // ✅ show scan progress only (we only need ONE scan for ANSI enrollment)
+    setSuccess("✅ Fingerprint captured. Saving enrollment...");
+
+    // ✅ save enrollment now
+    await handleRegisterBiometric(result.ansiPath);
+
+  } catch (err: any) {
+    setError("Hardware communication error.");
+  } finally {
+    setScanning(false);
+  }
+};
+
+ const handleRegisterBiometric = async (ansiPath: string) => {
+  if (!selectedMember || !ansiPath) return;
+
+  try {
+    setScanning(true);
+    setError("");
+    setSuccess("✅ Fingerprint captured. Saving enrollment...");
+
+    // ✅ 1) Read ANSI file base64 using Electron
+    const readRes = await window.electronAPI?.biometric?.readAnsiBase64?.(ansiPath);
+
+    if (!readRes?.success || !readRes?.ansi_base64) {
+      setError(readRes?.error || "❌ ANSI file read failed. Please scan again.");
+      return;
+    }
+
+    const ansi_base64 = readRes.ansi_base64;
+
+    // ✅ 2) Send correct payload to backend
+    const res = await axios.post(
+      `${backendUrl}/api/biometric/enroll-save`,
+      {
+        user_id: selectedMember.user_id,
+        council_id: selectedMember.council_id,
+        name: selectedMember.name,
+        committee_name: selectedMember.committee_name,
+        ansi_base64,
+      },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    if (res.data?.success !== true) {
+      setError(res.data?.error || res.data?.message || "❌ Enrollment failed.");
+      return;
+    }
+
+    setSuccess(`✅ Success! ${selectedMember.name} enrolled.`);
+    setTimeout(() => {
+      setSelectedMember(null);
+      setSuccess("");
+      loadMembers();
+    }, 1500);
+
+  } catch (err: any) {
+    console.error(err);
+
+    const msg =
+      err?.response?.data?.error ||
+      err?.response?.data?.message ||
+      err?.message ||
+      "❌ Server refused enrollment.";
+
+    setError(msg);
+  } finally {
+    setScanning(false);
+  }
+};
+
 
   return (
     <>
@@ -673,6 +747,11 @@ export default function BiometricAdminPanel({
                 <h2>Enrollment Wizard</h2>
                 <p>Registering: <strong>{selectedMember.name}</strong></p>
               </div>
+              <button onClick={handleInitBiometric} className="btn btn-primary" disabled={loading}>
+  <Fingerprint size={18} />
+  INIT Device
+</button>
+
 
               <div className="modal-body">
                 <div className={`scanner-visual ${scanning ? 'scanning' : ''}`}>
@@ -690,10 +769,10 @@ export default function BiometricAdminPanel({
                 <div className="scan-progress">
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: '0.85rem' }}>
                     <span>Quality Check</span>
-                    <strong>{scanCount} / 3 Scans</strong>
+                    <strong>1 Scans</strong>
                   </div>
                   <div className="progress-track">
-                    <div className="progress-fill" style={{ width: `${(scanCount/3)*100}%` }}></div>
+                    <div className="progress-fill" style={{ width: `${(scanCount/1)*100}%` }}></div>
                   </div>
                 </div>
 

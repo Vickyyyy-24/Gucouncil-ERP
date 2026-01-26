@@ -9,6 +9,7 @@
     "crypto": "^1.0.1",
     "crypto-js": "^4.2.0",
     "dotenv": "^16.3.1",
+    "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.562.0",
     "node-ffi": "^0.5.7",
     "react": "^18.2.0",
@@ -40,7 +41,6 @@
     "electron-start": "electron .",
     "start": "concurrently \"npm run react-start\" \"wait-on http://localhost:5050 && npm run electron-start\"",
     "build": "npm run react-build && electron-builder",
-    "postbuild": "node scripts/copy-sdk.js",
     "dist": "npm run build",
     "pack": "electron-builder --dir"
   },

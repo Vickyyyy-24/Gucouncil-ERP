@@ -1,14 +1,12 @@
 {
   "name": "mantra-addon",
   "version": "1.0.0",
-  "main": "build/Release/mantraaddon.node",
-  "private": true,
+  "main": "index.js",
   "gypfile": true,
   "scripts": {
-    "build": "node-gyp rebuild",
-    "clean": "node-gyp clean"
+    "build": "node-gyp rebuild"
   },
   "dependencies": {
-    "node-addon-api": "^7.1.0"
+    "node-addon-api": "^7.1.1"
   }
 }

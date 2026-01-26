@@ -42,7 +42,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6 }}
-            className="flex flex-col pt-4 md:pt-10"
+            className="flex flex-col pt-2 z-40 md:pt-10"
           >
             <h1 className="text-5xl md:text-8xl lg:text-8xl font-black text-[#1c3359] uppercase tracking-tighter leading-none">
               Council ERP
@@ -57,7 +57,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
-            className="w-full max-w-md md:ml-auto mt-8 md:mt-12"
+            className="w-full max-w-md md:ml-auto md:mt-12 z-40"
           >
             <form onSubmit={handleSubmit} className="space-y-12">
               
@@ -77,7 +77,7 @@ export default function LoginPage() {
                   placeholder="ENTER YOUR COUNCIL ID"
                   disabled={loading}
                   required
-                  className="w-full py-2 bg-transparent  border-b-[3px] border-gray-300 text-[#16213E] text-lg font-bold focus:outline-none focus:border-[#16213E] transition-colors duration-300 rounded-none"
+                  className="w-full bg-transparent  border-b-[3px] border-gray-300 text-[#16213E] text-lg font-bold focus:outline-none focus:border-[#16213E] transition-colors duration-300 rounded-none"
                   autoFocus
                 />
               </div>
@@ -98,7 +98,7 @@ export default function LoginPage() {
                   placeholder="ENTER YOUR PASSWORD"
                   disabled={loading}
                   required
-                  className="w-full py-2 bg-transparent  border-b-[3px] border-gray-300 text-[#16213E] text-lg font-bold focus:outline-none focus:border-[#16213E] transition-colors duration-300 rounded-none"
+                  className="w-full  bg-transparent  border-b-[3px] border-gray-300 text-[#16213E] text-lg font-bold focus:outline-none focus:border-[#16213E] transition-colors duration-300 rounded-none"
                   
                 />
               </div>

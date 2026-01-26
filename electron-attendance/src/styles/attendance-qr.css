@@ -1,0 +1,323 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg-dark: #191919;
+  --gold-accent: #cfad55;
+  --text-white: #ffffff;
+  --text-gray: #a0a0a0;
+  --danger: #e74c3c;
+  --success: #2ecc71;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-dark);
+}
+
+.erp-layout {
+  font-family: 'Poppins', sans-serif;
+  background-color: var(--bg-dark);
+  color: var(--text-white);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* --- HEADER --- */
+.erp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 40px;
+  height: 70px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.erp-logo-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.erp-logo-icon {
+  top: 30%;
+  left: 0 ;
+  width: 100px;
+  height: 60px;
+  background-image: url("../../public/logoerp.svg");
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  z-index: 1;
+  color: transparent;
+  position: relative;
+}
+/* stylized 'p' accent */
+/* .erp-logo-icon::after {
+  content: "´";
+  position: absolute;
+  color: var(--gold-accent);
+  top: -10px;
+  right: -5px;
+} */
+
+.erp-logo-text {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  border-left: 1px solid #555;
+  padding-left: 10px;
+  color: #fff;
+}
+
+.erp-status-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-label {
+  font-size: 13px;
+  letter-spacing: 2px;
+  margin-left: 130px;
+  font-weight: 500;
+  color: #eee;
+}
+
+.status-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: #444;
+}
+
+.status-dot.active { background-color: var(--success); box-shadow: 0 0 8px var(--success); }
+.status-dot.inactive { background-color: var(--danger); box-shadow: 0 0 8px var(--danger); }
+
+.erp-nav {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.erp-nav-item {
+  background: none;
+  border: none;
+  color: #fff;
+  font-family: 'Poppins', sans-serif;
+  font-size: 13px;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: color 0.2s;
+}
+
+.erp-nav-item:hover {
+  color: var(--gold-accent);
+}
+
+.erp-nav-divider {
+  color: #444;
+  font-size: 12px;
+}
+
+/* --- MAIN CONTENT --- */
+.erp-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding: 20px 40px;
+}
+
+/* SCANNER AREA */
+.erp-scanner-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.scanner-label {
+  align-self: flex-start;
+  margin-left: 20%; /* Approximate visual alignment */
+  margin-bottom: 5px;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.scanner-frame-wrapper {
+  width: 60%;
+  height: 350px;
+  border: 2px solid #fff;
+  position: relative;
+  background: #000;
+  overflow: hidden;
+}
+#qr-reader video {
+  object-fit: cover !important; /* Crops video to fill space */
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 0 !important;
+}
+#qr-reader__scan_region {
+  display: none !important;
+}
+#qr-reader div[style*="position: absolute"], 
+#qr-reader img {
+  display: none !important; }
+
+.erp-qr-reader {
+  width: 100%;
+  height: 100%;
+}
+/* Hide html5-qrcode standard UI elements we don't want */
+#qr-reader {
+  width: 100%;
+  height: 100%;
+  border: none !important;
+  padding: 0 !important;
+}
+#qr-reader__scan_region { object-fit: cover; }
+#qr-reader__dashboard_section_csr { display: none; } 
+
+.scanner-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20,20,20,0.9);
+  color: #555;
+  z-index: 10;
+}
+
+.scan-feedback {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 14px;
+  z-index: 20;
+}
+.scan-feedback.success { background: var(--success); color: #fff; }
+.scan-feedback.error { background: var(--danger); color: #fff; }
+
+/* VERTICAL COPYRIGHT */
+.erp-copyright-vertical {
+  position: absolute;
+  right: 20px;
+  top: 20px;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: #fff;
+  font-weight: 300;
+  height: 400px;
+  text-align: center;
+}
+
+/* ATTENDANCE PANEL (BOTTOM) */
+.erp-attendance-panel {
+  background: #fff; /* Design shows a white container */
+  border-radius: 12px;
+  height: 250px; /* Fixed height for the bottom panel */
+  display: flex;
+  flex-direction: column;
+  padding: 15px 30px;
+  color: #000;
+  margin-bottom: 20px;
+  box-shadow: 0 -5px 20px rgba(0,0,0,0.5);
+}
+
+.attendance-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.attendance-header h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 2px;
+  font-weight: 500;
+  text-transform: uppercase;
+  color: #333;
+}
+
+.erp-refresh-btn {
+  background: none;
+  border: none;
+  font-family: 'Poppins';
+  font-size: 14px;
+  letter-spacing: 2px;
+  color: #333;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+
+.attendance-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+}
+
+.empty-state {
+  font-size: 13px;
+  letter-spacing: 2px;
+  color: #555;
+  text-transform: uppercase;
+}
+
+.attendance-list {
+  width: 100%;
+  align-self: flex-start;
+}
+
+.erp-record-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+}
+.erp-record-row span { flex: 1; text-align: center; }
+.erp-record-row .rec-name { text-align: left; font-weight: 600; }
+.erp-record-row .rec-status.in { color: var(--success); }
+.erp-record-row .rec-status.out { color: var(--danger); }
+
+/* --- FOOTER --- */
+.erp-footer {
+  margin-top: auto;
+  position: relative;
+}
+
+.gold-bar {
+  height: 8px;
+  background-color: var(--gold-accent);
+  width: 100%;
+}
+
+.footer-content {
+  padding: 16px 40px;
+  font-size: 16px;
+  letter-spacing: 2px;
+  color: #ccc;
+  text-transform: uppercase;
+}

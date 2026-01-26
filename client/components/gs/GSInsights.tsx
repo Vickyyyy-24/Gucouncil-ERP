@@ -181,11 +181,12 @@ export default function GSInsight() {
 
   /* ================= UI ================= */
   return (
-    <div className="min-h-screen bg-[#020617] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#0f172a] via-[#020617] to-[#020617] p-6 text-blue-100 font-sans">
+    <div className="min-h-screen bg-[#0f0f0f] p-6 text-blue-100 font-sans">
       <header className="flex flex-col md:flex-row md:items-center justify-between mb-8 border-b border-blue-900/50 pb-6">
         <div>
           <h1 className="text-4xl md:text-5xl font-black text-white italic uppercase tracking-tight flex items-center justify-center lg:justify-start gap-3">
-            <LayoutDashboard className="text-blue-500 shrink-0" /> INSIGHTS
+            {/* <LayoutDashboard className="text-blue-500 shrink-0" />  */}
+            INSIGHTS
           </h1>
           <p className="text-blue-400/60 text-sm mt-1 uppercase tracking-widest font-medium">
             System Intelligence Monitor
@@ -202,7 +203,7 @@ export default function GSInsight() {
           <button
             data-download-btn
             onClick={downloadAttendancePdf}
-            className="group flex items-center gap-2 bg-blue-600/10 hover:bg-blue-600 border border-blue-500/50 text-blue-400 hover:text-white px-4 py-2 rounded-md transition-all duration-300 shadow-[0_0_15px_rgba(37,99,235,0.2)]"
+            className="group flex items-center gap-2 bg-[#0f0f0f] hover:bg-blue-600 border border-blue-500/50 text-blue-400 hover:text-white px-4 py-2 rounded-md transition-all duration-300 shadow-[0_0_15px_rgba(37,99,235,0.2)]"
           >
             <Download size={18} className="group-hover:animate-bounce" />
             <span className="text-sm font-semibold uppercase">Export PDF</span>
@@ -238,7 +239,7 @@ export default function GSInsight() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-[#0f172a]/40 border border-blue-500/20 backdrop-blur-md rounded-xl p-6 shadow-inner relative overflow-hidden group">
+            <div className="bg-[#1e1e1e] border border-blue-500/20 backdrop-blur-md rounded-xl p-6 shadow-inner relative overflow-hidden group">
               <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 group-hover:bg-cyan-400 transition-colors"></div>
               <h3 className="text-sm font-bold text-blue-300 mb-4 uppercase flex items-center gap-2">
                 <Activity size={16} /> Attendance Analytics
@@ -251,7 +252,7 @@ export default function GSInsight() {
             </div>
 
             {committee !== 'all' && (
-              <div className="bg-[#0f172a]/40 border border-blue-500/20 backdrop-blur-md rounded-xl p-6 shadow-xl">
+              <div className="bg-[#1e1e1e] border border-blue-500/20 backdrop-blur-md rounded-xl p-6 shadow-xl">
                 <CommitteeTable
                   committee={committee}
                   range={range}
@@ -262,7 +263,7 @@ export default function GSInsight() {
           </div>
 
           <div className="lg:col-span-1">
-            <div className="bg-[#0f172a]/60 border border-blue-500/30 backdrop-blur-lg rounded-xl p-4 h-full shadow-2xl relative">
+            <div className="bg-[#1e1e1e] border border-blue-500/30 backdrop-blur-lg rounded-xl p-4 h-full shadow-2xl relative">
               <div className="absolute top-0 right-0 p-2">
                 <span className="flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>

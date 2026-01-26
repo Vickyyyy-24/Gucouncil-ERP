@@ -50,7 +50,7 @@ export default function FiltersBar({
   `;
 
   return (
-    <div className="flex flex-col md:flex-row items-start md:items-center gap-4 bg-blue-900/10 p-2 rounded-xl border border-blue-500/10 backdrop-blur-sm">
+    <div className="flex flex-col md:flex-row items-start md:items-center gap-4 bg-[#1e1e1e] p-2 rounded-xl border border-blue-500/10 backdrop-blur-sm">
       
       {/* COMMITTEE SELECT */}
       <div className="relative w-full md:w-64">
@@ -85,7 +85,7 @@ export default function FiltersBar({
               onChange={e => setRange({ ...range, start: e.target.value })}
               className={`${inputClasses} w-full sm:w-44 color-scheme-dark`}
             />
-            <CalendarIcon size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-500 pointer-events-none opacity-50" />
+            <CalendarIcon size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-blue-500 pointer-events-none opacity-50" />
           </div>
         </div>
 

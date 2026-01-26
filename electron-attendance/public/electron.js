@@ -86,27 +86,9 @@ const logger = new Logger('biometric-service');
 // ============================================
 
 class BiometricDeviceManager extends EventEmitter {
-getStatus() {
-  const active = this.activeDevice;
-
-  return {
-    connected: active?.connected === true,
-    device: active
-      ? `${active.vendorName} (${active.id})`
-      : "No device detected",
-    isMock: active?.isMock === true,
-    devicesFound: this.devices.size,
-    activeDevice: active ? this.getDeviceInfo(active) : null,
-  };
-}
-
-listDevices() {
-  return Array.from(this.devices.values()).map((d) => this.getDeviceInfo(d));
-}
-
-
   constructor() {
     super();
+    this.isInitialized = false;
     this.devices = new Map();
     this.activeDevice = null;
     this.templateCache = new Map();
@@ -117,6 +99,8 @@ listDevices() {
     // stored as Array for matcher function
     this.enrolledUsers = [];
     this.enrolledLoadedAt = null;
+
+
 
     this.VENDOR_IDS = {
       SECUGEN: 0x096e,
@@ -139,47 +123,67 @@ listDevices() {
         name: 'Mantra MFS100 Fingerprint Reader',
         interface: 0,
         endpoints: { in: 0x81, out: 0x01 },
-        timeout: 5000,
-        captureTimeout: 6000,
+        timeout: 10000,
+        captureTimeout: 10000,
       },
     };
 
     logger.info('BiometricDeviceManager initialized');
   }
+  getStatus() {
+  const active = this.activeDevice;
+  return {
+    connected: active?.connected === true,
+    device: active
+      ? `${active.vendorName} (${active.id})`
+      : "No device detected",
+    isMock: active?.isMock === true,
+    devicesFound: this.devices.size,
+    activeDevice: active ? this.getDeviceInfo(active) : null,
+  };
+}
+
+listDevices() {
+  return Array.from(this.devices.values()).map((d) => this.getDeviceInfo(d));
+}
+
 
   async initialize() {
-    try {
-      logger.info('🔍 Scanning for biometric devices...');
+  try {
+    logger.info('🔍 Scanning for biometric devices...');
 
-      const mantraReady = mantraIntegration.initializeMantraSDK(logger);
-      logger.info(
-        `Mantra SDK status: ${mantraReady ? '✅ Ready' : '⚠️ Unavailable (will use mock)'}`
-      );
+    const mantraReady = mantraIntegration.initializeMantraSDK(logger);
+    logger.info(
+      `Mantra SDK status: ${mantraReady ? '✅ Ready' : '⚠️ Unavailable (will use mock)'}`
+    );
 
-      await this.scanDevices();
+    await this.scanDevices();
 
-      if (this.devices.size === 0) {
-        logger.warn('No biometric devices found. Creating mock device for testing.');
-        this.createMockDevice();
-      }
-
-      this.startMonitoring();
-
-      const result = {
-        success: true,
-        devicesFound: this.devices.size,
-        mantraInitialized: mantraReady,
-        devices: Array.from(this.devices.values()).map((d) => this.getDeviceInfo(d)),
-      };
-
-      logger.info('Initialization complete', result);
-      return result;
-    } catch (error) {
-      logger.error('Device initialization error', { message: error.message });
+    if (this.devices.size === 0) {
+      logger.warn('No biometric devices found. Creating mock device for testing.');
       this.createMockDevice();
-      return { success: false, error: error.message, fallback: 'Mock device created' };
     }
+
+    this.startMonitoring();
+    this.isInitialized = true; // ✅ ADD THIS
+
+    const result = {
+      success: true,
+      devicesFound: this.devices.size,
+      mantraInitialized: mantraReady,
+      devices: Array.from(this.devices.values()).map((d) => this.getDeviceInfo(d)),
+    };
+
+    logger.info('Initialization complete', result);
+    return result;
+  } catch (error) {
+    this.isInitialized = false;
+    logger.error('Device initialization error', { message: error.message });
+    this.createMockDevice();
+    return { success: false, error: error.message, fallback: 'Mock device created' };
   }
+}
+
 
   async scanDevices() {
     try {
@@ -404,147 +408,165 @@ listDevices() {
   }
 
   async captureFingerprint(options = {}) {
-    try {
-      if (!this.activeDevice) return { success: false, error: 'No device available' };
-      if (!this.activeDevice.connected) return { success: false, error: 'Device not connected' };
-
-      logger.info(`Capturing fingerprint from ${this.activeDevice.vendorName}...`);
-
-      let template;
-      let quality;
-      let isRealCapture = false;
-
-      if (mantraIntegration.isMantraInitialized() && this.activeDevice.vendorId === '0x2c0f') {
-        const mantraResult = await mantraIntegration.captureWithMantraSDK(logger);
-        if (mantraResult?.template) {
-          template = mantraResult.template;
-          quality = mantraResult.quality;
-          isRealCapture = mantraResult.isReal;
-        }
-      }
-
-      if (!template) {
-        template = crypto.randomBytes(512).toString('base64');
-        quality = Math.floor(Math.random() * 50) + 50;
-      }
-
-      const hash = crypto.createHash('sha256').update(template).digest('hex');
-
-      this.activeDevice.captureCount++;
-      this.activeDevice.lastUsed = new Date();
-
-      this.templateCache.set(hash, {
-        template,
-        timestamp: Date.now(),
-        quality,
-        isReal: isRealCapture,
-      });
-
-      if (this.templateCache.size > 100) {
-        const firstKey = this.templateCache.keys().next().value;
-        this.templateCache.delete(firstKey);
-      }
-
-      return {
-        success: true,
-        template,
-        hash,
-        quality,
-        deviceId: this.activeDevice.id,
-        deviceName: this.activeDevice.vendorName,
-        timestamp: new Date().toISOString(),
-        isReal: isRealCapture,
-      };
-    } catch (error) {
-      logger.error('Capture error', { message: error.message });
-      return { success: false, error: error.message };
+  try {
+    if (!this.isInitialized) {
+      return { success: false, error: "Biometric system not initialized. Please click INIT first." };
     }
-  }
 
-  // ============================================
-  // ✅ LOAD ENROLLED TEMPLATES FROM BACKEND
-  // ============================================
-  async loadEnrolledFromBackend(token) {
-    try {
-      if (!token) return { success: false, error: 'Token required' };
+    if (!this.activeDevice) return { success: false, error: "No device available" };
+    if (!this.activeDevice.connected) return { success: false, error: "Device not connected" };
 
-      logger.info('📥 Loading enrolled biometrics from backend...');
+    logger.info(`Capturing fingerprint from ${this.activeDevice.vendorName}...`);
 
-      const res = await axios.get(`${BACKEND_URL}/api/biometric/enrolled`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+    let template;
+    let quality;
+    let isRealCapture = false;
+    let ansiPath = null; // ✅ IMPORTANT
 
-      const rows = res.data?.data || res.data?.rows || [];
-      if (!Array.isArray(rows)) return { success: false, error: 'Invalid payload' };
+    // ✅ REAL CAPTURE using Mantra SDK (AnsiTemplate.ansi)
+    if (mantraIntegration.isMantraInitialized() && this.activeDevice.vendorId === "0x2c0f") {
+      const mantraResult = await mantraIntegration.captureWithMantraSDK(logger);
 
-      this.enrolledUsers = rows
-        .filter((r) => r?.fingerprint_template)
-        .map((r) => ({
-          user_id: r.user_id,
-          council_id: r.council_id,
-          name: r.name,
-          committee_name: r.committee_name,
-          fingerprint_template: r.fingerprint_template,
-        }));
+      if (mantraResult?.template) {
+        template = mantraResult.template;
+        quality = mantraResult.quality;
+        isRealCapture = mantraResult.isReal;
+      }
 
-      this.enrolledLoadedAt = new Date().toISOString();
-
-      logger.info(`✅ Enrolled templates loaded: ${this.enrolledUsers.length}`);
-
-      return {
-        success: true,
-        count: this.enrolledUsers.length,
-        loadedAt: this.enrolledLoadedAt,
-      };
-    } catch (error) {
-      logger.error('❌ loadEnrolled failed', { message: error.message });
-      return { success: false, error: error.message };
+      if (mantraResult?.ansiPath) {
+        ansiPath = mantraResult.ansiPath; // ✅ used for DLL match
+      }
     }
+
+    // ✅ fallback simulated
+    if (!template) {
+      template = crypto.randomBytes(512).toString("base64");
+      quality = Math.floor(Math.random() * 50) + 50;
+    }
+
+    const hash = crypto.createHash("sha256").update(template).digest("hex");
+
+    this.activeDevice.captureCount++;
+    this.activeDevice.lastUsed = new Date();
+
+    this.templateCache.set(hash, {
+      template,
+      timestamp: Date.now(),
+      quality,
+      isReal: isRealCapture,
+      ansiPath,
+    });
+
+    if (this.templateCache.size > 100) {
+      const firstKey = this.templateCache.keys().next().value;
+      this.templateCache.delete(firstKey);
+    }
+
+    return {
+      success: true,
+      template,          // optional (keep)
+      ansiPath,          // ✅ REQUIRED FOR MATCHING
+      hash,
+      quality,
+      deviceId: this.activeDevice.id,
+      deviceName: this.activeDevice.vendorName,
+      timestamp: new Date().toISOString(),
+      isReal: isRealCapture,
+    };
+  } catch (error) {
+    logger.error("Capture error", { message: error.message });
+    return { success: false, error: error.message };
   }
+}
+async loadEnrolledFromBackend(token) {
+  try {
+    if (!token) return { success: false, error: "Token required" };
+
+    logger.info("📥 Loading enrolled biometrics from backend...");
+
+    const res = await axios.get(`${BACKEND_URL}/api/biometric/enrolled`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const rows = res.data?.data || res.data?.rows || [];
+    if (!Array.isArray(rows)) return { success: false, error: "Invalid payload" };
+
+    // ✅ STORE ANSI PATH FOR DLL MATCH
+    this.enrolledUsers = rows
+      .filter((r) => r?.ansi_path)
+      .map((r) => ({
+        user_id: r.user_id,
+        council_id: r.council_id,
+        name: r.name,
+        committee_name: r.committee_name,
+        ansi_path: r.ansi_path,
+      }));
+
+    this.enrolledLoadedAt = new Date().toISOString();
+
+    logger.info(`✅ Enrolled templates loaded: ${this.enrolledUsers.length}`);
+
+    return {
+      success: true,
+      count: this.enrolledUsers.length,
+      loadedAt: this.enrolledLoadedAt,
+    };
+  } catch (error) {
+    logger.error("❌ loadEnrolled failed", { message: error.message });
+    return { success: false, error: error.message };
+  }
+}
 
   // ============================================
   // ✅ MATCH SCANNED TEMPLATE WITH ENROLLED CACHE
   // ============================================
-  async matchFingerprintTemplate(scannedTemplate) {
-    try {
-      if (!scannedTemplate) {
-        return { success: false, error: 'Template required' };
-      }
+  async matchFingerprintTemplate(scannedInput) {
+  try {
+    // ✅ Accept both string ansiPath OR capture object
+    const scannedAnsiPath =
+      typeof scannedInput === "string"
+        ? scannedInput
+        : scannedInput?.ansiPath;
 
-      if (!Array.isArray(this.enrolledUsers) || this.enrolledUsers.length === 0) {
-        return { success: false, error: 'No enrolled templates loaded' };
-      }
-
-      // ✅ Use your matcher from mantra-sdk-integration.js
-      const matchResult = mantraIntegration.matchFingerprintWithEnrolled(
-        logger,
-        scannedTemplate,
-        this.enrolledUsers
-      );
-
-      if (!matchResult?.matched) {
-        return { success: true, matched: false, score: matchResult?.score || 0 };
-      }
-
-      return {
-        success: true,
-        matched: true,
-        userId: matchResult.userId,
-        councilId: matchResult.councilId,
-        name: matchResult.name,
-        committee: matchResult.committee,
-        score: matchResult.score,
-      };
-    } catch (error) {
-      logger.error('Match error', { message: error.message });
-      return { success: false, error: error.message };
+    if (!scannedAnsiPath) {
+      return { success: false, error: "ANSI path required" };
     }
+
+    if (!Array.isArray(this.enrolledUsers) || this.enrolledUsers.length === 0) {
+      return { success: false, error: "No enrolled templates loaded" };
+    }
+
+    const matchResult = await mantraIntegration.matchFingerprintWithEnrolled(
+      logger,
+      scannedAnsiPath,
+      this.enrolledUsers
+    );
+
+    if (!matchResult?.matched) {
+      return { success: true, matched: false, score: matchResult?.score || 0 };
+    }
+
+    return {
+      success: true,
+      matched: true,
+      userId: matchResult.userId,
+      councilId: matchResult.councilId,
+      name: matchResult.name,
+      committee: matchResult.committee,
+      score: matchResult.score,
+    };
+  } catch (error) {
+    logger.error("Match error", { message: error.message });
+    return { success: false, error: error.message };
   }
+}
+
 
   shutdown() {
     logger.info('Shutting down biometric service...');
 
     if (this.healthCheckInterval) clearInterval(this.healthCheckInterval);
+    this.isInitialized = false;
 
     this.isMonitoring = false;
 
@@ -580,7 +602,7 @@ function createWindow() {
     height: 900,
     minWidth: 800,
     minHeight: 600,
-    icon: path.join(__dirname, '../assets/icon.png'),
+    icon: path.join(__dirname, '../assets/E (512 x 512 px).svg'),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -621,8 +643,9 @@ function createWindow() {
 app.on('ready', async () => {
   logger.info(`${APP_CONFIG.APP_NAME} starting...`);
   createWindow();
-  await biometricManager.initialize();
+  logger.info("✅ App ready. Waiting for manual biometric:init call...");
 });
+
 
 app.on('window-all-closed', () => {
   biometricManager.shutdown();
@@ -639,9 +662,22 @@ app.on('before-quit', () => {
   biometricManager.shutdown();
 });
 
+
 // ============================================
 // IPC HANDLERS
 // ============================================
+ipcMain.handle("biometric:readAnsiBase64", async (event, ansiPath) => {
+  try {
+    if (!ansiPath || !fs.existsSync(ansiPath)) {
+      return { success: false, error: "ANSI file not found" };
+    }
+
+    const raw = fs.readFileSync(ansiPath);
+    return { success: true, ansi_base64: raw.toString("base64") };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
 
 ipcMain.handle('biometric:init', async () => biometricManager.initialize());
 ipcMain.handle('biometric:getStatus', async () => biometricManager.getStatus());
@@ -652,8 +688,11 @@ ipcMain.handle("biometric:listDevices", async () => ({
 }));
 
 
-ipcMain.handle('biometric:capture', async (event, options = {}) => {
-  return biometricManager.captureFingerprint(options);
+ipcMain.handle("biometric:capture", async (event, options = {}) => {
+  return biometricManager.captureFingerprint({
+    purpose: options?.purpose || "attendance",
+    silent: true, // ✅ future improvement
+  });
 });
 
 ipcMain.handle('biometric:test', async () => biometricManager.captureFingerprint());
@@ -669,8 +708,8 @@ ipcMain.handle('biometric:loadEnrolled', async (event, token) => {
 });
 
 // ✅ NEW IPC: Match scanned fingerprint template
-ipcMain.handle('biometric:match', async (event, scannedTemplate) => {
-  return biometricManager.matchFingerprintTemplate(scannedTemplate);
+ipcMain.handle("biometric:match", async (event, scannedInput) => {
+  return biometricManager.matchFingerprintTemplate(scannedInput);
 });
 
 // APP IPC

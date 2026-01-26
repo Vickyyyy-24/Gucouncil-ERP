@@ -399,6 +399,24 @@
   font-weight: 700;
   font-size: 0.9rem;
 }
+.time-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  text-align: right;
+  color: #555;
+}
+
+.time {
+  font-weight: 600;
+}
+
+.pill.out {
+  background: #ffecec;
+  color: #c40000;
+}
+
 
 .right {
   display: flex;

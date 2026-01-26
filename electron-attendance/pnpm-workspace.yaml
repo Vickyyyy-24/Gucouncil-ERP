@@ -1,6 +1,3 @@
-ignoredBuiltDependencies:
-  - edge-js
-
 onlyBuiltDependencies:
   - '@serialport/bindings-cpp'
   - core-js

@@ -3,6 +3,9 @@ import axios from "axios"
 import { Fingerprint, AlertCircle, CheckCircle, Loader, RefreshCw } from "lucide-react"
 import '../styles/attendance.css';
 
+
+
+
 interface AttendanceRecordUI {
   id: number
   council_id: string
@@ -42,11 +45,12 @@ export default function AttendanceMarking({
   isPublicKiosk = true,
 }: AttendanceMarkingProps) {
   const backendUrl = process.env.REACT_APP_BACKEND_URL || "http://localhost:5005"
-
+  const [enrolledReady, setEnrolledReady] = useState(false)
   const [deviceConnected, setDeviceConnected] = useState(false)
   const [isActive, setIsActive] = useState(false)
 
   const [scanning, setScanning] = useState(false)
+  const [autoMode, setAutoMode] = useState(true) // kiosk auto scan
   const [loadingRecords, setLoadingRecords] = useState(false)
 
   const [error, setError] = useState("")
@@ -74,17 +78,56 @@ export default function AttendanceMarking({
     }
   }, [])
 
-  useEffect(() => {
-    checkDeviceStatus()
 
-    // ✅ Admin mode auto load live attendance list
-    if (!isPublicKiosk && token) {
-      loadTodayAttendance()
+useEffect(() => {
+  console.log("AUTO MODE CHECK:", { isActive, deviceConnected, enrolledReady })
+
+  if (!isPublicKiosk) return
+  if (!isActive) return
+  if (!deviceConnected) return
+  if (!enrolledReady) return
+
+  console.log("✅ AUTO LOOP STARTED")
+}, [isActive, deviceConnected, enrolledReady])
+
+const initBiometricSystem = async () => {
+  try {
+    setLoadingRecords(true)
+    setError("")
+    setSuccess("")
+
+    // ✅ init device
+    const initRes = await window.electronAPI?.biometric?.init?.()
+    if (!initRes?.success) {
+      setError("❌ Biometric init failed. Check device drivers.")
+      return
     }
 
-    const interval = setInterval(checkDeviceStatus, 2000)
-    return () => clearInterval(interval)
-  }, [])
+    // ✅ load enrolled templates into Electron cache
+    // IMPORTANT: this requires token
+    if (token) {
+      const loadRes = await window.electronAPI?.biometric?.loadEnrolled?.(token)
+
+      if (!loadRes?.success) {
+        setError("❌ Failed to load enrolled templates from backend.")
+        return
+      }
+
+      setEnrolledReady(true)
+      setSuccess(`✅ Enrolled Loaded: ${loadRes.count || 0}`)
+    } else {
+      // kiosk mode without token - can't load enrolled
+      setError("❌ Token missing. Enrolled templates cannot load.")
+      setEnrolledReady(false)
+    }
+  } catch (err) {
+    setError("❌ Biometric init error.")
+    setEnrolledReady(false)
+  } finally {
+    setLoadingRecords(false)
+    resetMessages(3000)
+  }
+}
 
   // ---------------- ADMIN: LIVE LIST ----------------
   const loadTodayAttendance = async () => {
@@ -96,27 +139,40 @@ export default function AttendanceMarking({
         headers: { Authorization: `Bearer ${token}` },
       })
 
-      const raw = response.data?.present || []
+    const raw = response.data?.records || []
 
-      const mapped: AttendanceRecordUI[] = raw.map((r: any, idx: number) => ({
-        id: idx + 1,
-        council_id: r.council_id,
-        name: r.name,
-        committee: r.committee,
-        status: "punched_in",
-        punch_in: r.punch_in,
-        duration_minutes: r.duration_minutes,
-        biometric_quality: r.biometric_quality,
-      }))
 
-      setTodayAttendance(mapped)
+const mapped: AttendanceRecordUI[] = raw.map((r: any, idx: number) => ({
+  id: idx + 1,
+  council_id: r.council_id,
+  name: r.name,
+  committee: r.committee,
+  status: r.status,
+  punch_in: r.punch_in,
+  punch_out: r.punch_out,
+  duration_minutes: Math.floor(Number(r.duration_minutes || 0)),
+  biometric_quality: r.biometric_quality,
+}))
+setTodayAttendance(mapped)
+
     } catch (err) {
       console.error("loadTodayAttendance error:", err)
     } finally {
       setLoadingRecords(false)
     }
   }
+const formatTime = (dateStr?: string) => {
+  if (!dateStr) return "-"
+  const d = new Date(dateStr)
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
 
+const formatDuration = (mins?: number) => {
+  if (!mins || mins <= 0) return "-"
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return h > 0 ? `${h}h ${m}m` : `${m}m`
+}
   // ---------------- SYSTEM START/STOP ----------------
   const handleStartAttendance = () => {
     if (!deviceConnected) {
@@ -137,45 +193,80 @@ export default function AttendanceMarking({
     resetMessages(2500)
   }
 
+ useEffect(() => {
+  checkDeviceStatus()
+  if (token) initBiometricSystem()
+
+  if (!isPublicKiosk && token) {
+    loadTodayAttendance()
+  }
+
+  const interval = setInterval(checkDeviceStatus, 2000)
+  return () => clearInterval(interval)
+}, [])
   // ==========================================================
   // ✅ NEW MAIN SCAN FLOW (CAPTURE TEMPLATE -> SEND TO BACKEND)
   // ==========================================================
   const handleScanFingerprint = async () => {
-    if (!isActive) {
-      setError("⚠️ Please start attendance system first.")
+  if (!isActive) {
+    setError("⚠️ Please start attendance system first.")
+    resetMessages()
+    return
+  }
+
+  if (!deviceConnected) {
+    setError("❌ Fingerprint device not connected.")
+    await checkDeviceStatus()
+    resetMessages()
+    return
+  }
+
+  if (!enrolledReady) {
+    setError("⚠️ Enrolled fingerprints not loaded. Please INIT again.")
+    resetMessages()
+    return
+  }
+  if (scanning) return
+
+  try {
+    setScanning(true)
+    setError("")
+    setSuccess("")
+
+    // ✅ 1) Capture (gets ansiPath)
+    const capRes = await window.electronAPI?.biometric?.capture?.({
+      purpose: "attendance",
+    })
+
+    if (!capRes?.success || !capRes.ansiPath) {
+      setError(capRes?.error || "❌ Capture failed (ANSI missing).")
       resetMessages()
       return
     }
 
-    if (!deviceConnected) {
-      setError("❌ Fingerprint device not connected.")
-      await checkDeviceStatus()
+    // ✅ 2) Match locally using DLL
+    const matchRes = await window.electronAPI?.biometric?.match?.(capRes.ansiPath)
+
+    if (!matchRes?.success) {
+      setError(matchRes?.error || "❌ Match failed.")
       resetMessages()
       return
     }
 
+    if (!matchRes?.matched || !matchRes?.councilId) {
+      setError(`❌ No match found. Score: ${matchRes?.score || 0}`)
+      resetMessages(4000)
+      return
+    }
+
+    const councilId = matchRes.councilId
+
+    // ✅ 3) Punch-in / Punch-out based on backend state
+    // We'll call punch-in first; if backend returns already punched-in then punch-out
     try {
-      setScanning(true)
-      setError("")
-      setSuccess("")
-
-      // ✅ 1) Capture fingerprint template from hardware
-      const capRes = await window.electronAPI?.biometric?.capture?.({
-        purpose: "attendance",
-      })
-
-      if (!capRes || capRes.success !== true || !capRes.template) {
-        setError(capRes?.error || "❌ Capture failed. Please try again.")
-        resetMessages()
-        return
-      }
-
-      const template = capRes.template
-
-      // ✅ 2) First try punch-in
-      // Backend will match fingerprintTemplate -> user -> check status -> punch in
       const punchInRes = await axios.post(`${backendUrl}/api/attendance/kiosk/punch-in`, {
-        fingerprintTemplate: template,
+        councilId,
+        score: matchRes.score || 0,
       })
 
       if (punchInRes.data?.success === true) {
@@ -195,87 +286,78 @@ export default function AttendanceMarking({
         if (!isPublicKiosk && token) await loadTodayAttendance()
         return
       }
-
-      // ✅ If punch-in fails due to already punched in, try punch-out
-      // (Your backend returns "Already punched in" with 400)
     } catch (err: any) {
-      const msg = err?.response?.data?.message
+      const msg = err?.response?.data?.message || ""
 
-      // ✅ If already punched in -> try punch-out
-      if (String(msg || "").toLowerCase().includes("already punched in")) {
-        await tryPunchOutFlow()
+      // ✅ Already punched in -> try punch out
+      if (String(msg).toLowerCase().includes("already punched in")) {
+        await tryPunchOutByCouncilId(councilId, matchRes)
         return
       }
 
-      // Normal errors
-      setError("❌ " + String(msg || err.message || "Attendance failed"))
-      resetMessages()
-    } finally {
-      setScanning(false)
+      throw err
     }
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err.message
+    setError("❌ " + String(msg || "Attendance failed"))
+    resetMessages()
+  } finally {
+    setScanning(false)
   }
+}
 
   // ✅ Punch-out flow with 30 min rule handled by backend
-  const tryPunchOutFlow = async () => {
-    try {
-      setScanning(true)
-      setError("")
-      setSuccess("")
+  const tryPunchOutByCouncilId = async (councilId: string, matchRes?: any) => {
+  try {
+    setScanning(true)
+    setError("")
+    setSuccess("")
 
-      const capRes = await window.electronAPI?.biometric?.capture?.({
-        purpose: "attendance",
-      })
+    const punchOutRes = await axios.post(`${backendUrl}/api/attendance/kiosk/punch-out`, {
+      councilId,
+      score: matchRes?.score || 0,
+    })
 
-      if (!capRes || capRes.success !== true || !capRes.template) {
-        setError(capRes?.error || "❌ Capture failed. Try again.")
-        resetMessages()
-        return
-      }
-
-      const punchOutRes = await axios.post(`${backendUrl}/api/attendance/kiosk/punch-out`, {
-        fingerprintTemplate: capRes.template,
-      })
-
-      if (punchOutRes.data?.success !== true) {
-        setError("❌ " + String(punchOutRes.data?.message || "Punch-out failed"))
-        resetMessages()
-        return
-      }
-
-      const member = punchOutRes.data?.member
-      const duration = punchOutRes.data?.duration_minutes || 0
-
-      setLastScan({
-        id: Date.now(),
-        council_id: member.council_id,
-        name: member.name,
-        committee: member.committee,
-        status: "completed",
-        punch_in: member.punch_in,
-        punch_out: member.punch_out,
-        duration_minutes: duration,
-      })
-
-      setSuccess(`✅ ${member.name} PUNCHED OUT! Duration: ${duration} minutes`)
-      resetMessages(5000)
-
-      if (!isPublicKiosk && token) await loadTodayAttendance()
-    } catch (err: any) {
-      const msg = err?.response?.data?.message || err.message
-
-      // ✅ Backend says 30-min rule
-      if (String(msg).toLowerCase().includes("need to work")) {
-        setError("⏳ " + msg)
-        resetMessages(6000)
-        return
-      }
-
-      setError("❌ " + String(msg || "Punch-out failed"))
+    if (punchOutRes.data?.success !== true) {
+      setError("❌ " + String(punchOutRes.data?.message || "Punch-out failed"))
       resetMessages()
-    } finally {
-      setScanning(false)
+      return
     }
+
+    const member = punchOutRes.data?.member
+    const duration = punchOutRes.data?.duration_minutes || 0
+
+    setLastScan({
+      id: Date.now(),
+      council_id: member.council_id,
+      name: member.name,
+      committee: member.committee,
+      status: "completed",
+      punch_in: member.punch_in,
+      punch_out: member.punch_out,
+      duration_minutes: duration,
+    })
+
+    setSuccess(`✅ ${member.name} PUNCHED OUT! Duration: ${duration} minutes`)
+    resetMessages(5000)
+
+    if (!isPublicKiosk && token) await loadTodayAttendance()
+  } catch (err: any) {
+    const msg = err?.response?.data?.message || err.message
+
+    if (String(msg).toLowerCase().includes("need to work")) {
+      setError("⏳ " + msg)
+      resetMessages(6000)
+      return
+    }
+
+    setError("❌ " + String(msg || "Punch-out failed"))
+    resetMessages()
+  } finally {
+    setScanning(false)
   }
+}
+
 
   // ==========================================================
   // ✅ PUBLIC KIOSK UI
@@ -285,6 +367,9 @@ export default function AttendanceMarking({
       <div className="attendance-container kiosk">
         <header className="topbar">
           <div className="topbar-left">
+          <button className="mini-btn" onClick={initBiometricSystem}>
+          <RefreshCw size={16} /> INIT + Load
+           </button>
             <Fingerprint className="topbar-icon" />
             <div>
               <h1>Attendance Kiosk</h1>
@@ -355,35 +440,50 @@ export default function AttendanceMarking({
           </section>
 
           {lastScan && (
-            <div className="last-card">
-              <h3>✅ Last Record</h3>
+  <div className="last-card">
+    <h3>✅ Last Record</h3>
 
-              <div className="row">
-                <span className="label">Name</span>
-                <span className="value">{lastScan.name}</span>
-              </div>
+    <div className="row">
+      <span className="label">Name</span>
+      <span className="value">{lastScan.name}</span>
+    </div>
 
-              <div className="row">
-                <span className="label">Committee</span>
-                <span className="value">{lastScan.committee}</span>
-              </div>
+    <div className="row">
+      <span className="label">Committee</span>
+      <span className="value">{lastScan.committee}</span>
+    </div>
 
-              <div className="row">
-                <span className="label">Status</span>
-                <span className={`value badge ${lastScan.status}`}>
-                  {lastScan.status === "punched_in" ? "📍 PUNCH IN" : "✅ PUNCH OUT"}
-                </span>
-              </div>
+    <div className="row">
+      <span className="label">Status</span>
+      <span className={`value badge ${lastScan.status}`}>
+        {lastScan.status === "punched_in" ? "📍 PUNCH IN" : "✅ PUNCH OUT"}
+      </span>
+    </div>
 
-              {typeof lastScan.duration_minutes === "number" && lastScan.duration_minutes > 0 && (
-                <div className="row">
-                  <span className="label">Duration</span>
-                  <span className="value">{lastScan.duration_minutes} mins</span>
-                </div>
-              )}
-            </div>
-          )}
-        </main>
+    {/* ✅ Show Exact Punch In Time */}
+    <div className="row">
+      <span className="label">Punch In</span>
+      <span className="value">{formatTime(lastScan.punch_in)}</span>
+    </div>
+
+    {/* ✅ Show Punch Out Only If Completed */}
+    {lastScan.punch_out && (
+      <div className="row">
+        <span className="label">Punch Out</span>
+        <span className="value">{formatTime(lastScan.punch_out)}</span>
+      </div>
+    )}
+
+    {/* ✅ Duration */}
+    {typeof lastScan.duration_minutes === "number" && lastScan.duration_minutes > 0 && (
+      <div className="row">
+        <span className="label">Duration</span>
+        <span className="value">{formatDuration(lastScan.duration_minutes)}</span>
+      </div>
+    )}
+  </div>
+)}
+      </main>
       </div>
     )
   }
@@ -440,7 +540,11 @@ export default function AttendanceMarking({
             <button className="action-btn danger" onClick={handleStopAttendance}>
               ⏹ Stop Attendance
             </button>
+            
           )}
+          <button className="mini-btn" onClick={initBiometricSystem}>
+          <RefreshCw size={16} /> INIT + Load
+           </button>
         </div>
 
         {error && (
@@ -479,34 +583,50 @@ export default function AttendanceMarking({
         </section>
 
         {lastScan && (
-          <div className="last-card">
-            <h3>✅ Last Attendance Record</h3>
+  <div className="last-card">
+    <h3>✅ Last Record</h3>
 
-            <div className="row">
-              <span className="label">Name</span>
-              <span className="value">{lastScan.name}</span>
-            </div>
+    <div className="row">
+      <span className="label">Name</span>
+      <span className="value">{lastScan.name}</span>
+    </div>
 
-            <div className="row">
-              <span className="label">Committee</span>
-              <span className="value">{lastScan.committee}</span>
-            </div>
+    <div className="row">
+      <span className="label">Committee</span>
+      <span className="value">{lastScan.committee}</span>
+    </div>
 
-            <div className="row">
-              <span className="label">Status</span>
-              <span className={`value badge ${lastScan.status}`}>
-                {lastScan.status === "punched_in" ? "✅ IN" : "🚪 OUT"}
-              </span>
-            </div>
+    <div className="row">
+      <span className="label">Status</span>
+      <span className={`value badge ${lastScan.status}`}>
+        {lastScan.status === "punched_in" ? "📍 PUNCH IN" : "✅ PUNCH OUT"}
+      </span>
+    </div>
 
-            {typeof lastScan.duration_minutes === "number" && lastScan.duration_minutes > 0 && (
-              <div className="row">
-                <span className="label">Duration</span>
-                <span className="value">{lastScan.duration_minutes} mins</span>
-              </div>
-            )}
-          </div>
-        )}
+    {/* ✅ Show Exact Punch In Time */}
+    <div className="row">
+      <span className="label">Punch In</span>
+      <span className="value">{formatTime(lastScan.punch_in)}</span>
+    </div>
+
+    {/* ✅ Show Punch Out Only If Completed */}
+    {lastScan.punch_out && (
+      <div className="row">
+        <span className="label">Punch Out</span>
+        <span className="value">{formatTime(lastScan.punch_out)}</span>
+      </div>
+    )}
+
+    {/* ✅ Duration */}
+    {typeof lastScan.duration_minutes === "number" && lastScan.duration_minutes > 0 && (
+      <div className="row">
+        <span className="label">Duration</span>
+        <span className="value">{formatDuration(lastScan.duration_minutes)}</span>
+      </div>
+    )}
+  </div>
+)}
+
 
         <section className="live-list">
           <div className="live-header">
@@ -537,9 +657,20 @@ export default function AttendanceMarking({
                     </p>
                   </div>
                   <div className="right">
-                    <span className="pill in">✅ IN</span>
-                    <span className="mins">{r.duration_minutes || 0} min</span>
-                  </div>
+  <span className={`pill ${r.status === "completed" ? "out" : "in"}`}>
+    {r.status === "completed" ? "🚪 OUT" : "✅ IN"}
+  </span>
+
+  <div className="time-stack">
+    <span className="time">{formatTime(r.punch_in)} IN</span>
+
+    {r.punch_out ? (
+      <span className="time">{formatTime(r.punch_out)} OUT</span>
+    ) : (
+      <span className="time">-- OUT</span>
+    )}
+  </div>
+</div>
                 </div>
               ))}
             </div>

@@ -16,6 +16,7 @@ import BulkProfileCreation from '@/components/admin/BulkProfileCreation'
 import AttendanceManagement from '@/components/admin/AttendanceManagement'
 import BiometricRegistration from '@/components/admin/BiometricRegistration'
 import LogsManagement from '@/components/admin/LogsManagement'
+import AttendanceSettingsPanel from '@/components/admin/AttendanceSettingsPanel'
 
 // Head components (admin view)
 import CommitteeInsights from '@/components/head/CommitteeInsights'
@@ -151,6 +152,7 @@ export default function AdminDashboard() {
     { id: 'create-profile', label: 'Create User Profile', icon: 'UserCircle' },
     { id: 'bulk-profiles', label: 'Bulk Profile Creation', icon: 'ClipboardList' },
     { id: 'attendance', label: 'Attendance Analytics', icon: 'Clock' },
+    { id: 'attendance-settings', label: 'Attendance Settings', icon: 'Settings' },
     { id: 'biometric', label: 'Biometric Registration', icon: 'Fingerprint' },
     { id: 'logs', label: 'Logs & Reports', icon: 'FileText' },
     { id: 'insights', label: 'Committee Insights', icon: 'BarChart3' },
@@ -170,6 +172,8 @@ export default function AdminDashboard() {
         return <BulkProfileCreation />
       case 'attendance':
         return <AttendanceManagement />
+      case 'attendance-settings':
+        return <AttendanceSettingsPanel />
       case 'biometric':
         return <BiometricRegistration />
       case 'logs':

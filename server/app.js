@@ -11,6 +11,9 @@ const { emitAttendanceUpdate } = require('./socket');
 const generateCommitteePdf = require('./utils/generateCommitteePdf')
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const os = require("os");
+process.env.TZ = "Asia/Kolkata";
+
 
 
 // ============================================
@@ -2355,246 +2358,1117 @@ app.get(
   }
 )
 // ============================================
-// BIOMETRIC ROUTES
+//QR ROUTES
 // ============================================
+async function getAttendanceSettings() {
+  const res = await pool.query(`SELECT * FROM attendance_settings WHERE id=1`);
+  if (res.rows.length === 0) {
+    await pool.query(`INSERT INTO attendance_settings (id) VALUES (1)`);
+    const r = await pool.query(`SELECT * FROM attendance_settings WHERE id=1`);
+    return r.rows[0];
+  }
+  return res.rows[0];
+}
+const QR_SECRET = process.env.QR_SECRET || process.env.JWT_SECRET || "qr-secret-change-me";
+async function updateAttendanceSettings(payload, adminId) {
+  const {
+    qr_enabled,
+    qr_expiry_seconds,
+    time_window_enabled,
+    start_time,
+    end_time,
+    punchout_min_minutes,
+  } = payload;
+
+  const res = await pool.query(
+    `
+    UPDATE attendance_settings SET
+      qr_enabled = COALESCE($1, qr_enabled),
+      qr_expiry_seconds = COALESCE($2, qr_expiry_seconds),
+      time_window_enabled = COALESCE($3, time_window_enabled),
+      start_time = COALESCE($4, start_time),
+      end_time = COALESCE($5, end_time),
+      punchout_min_minutes = COALESCE($6, punchout_min_minutes),
+      updated_by = $7,
+      updated_at = NOW()
+    WHERE id=1
+    RETURNING *;
+    `,
+    [
+      qr_enabled,
+      qr_expiry_seconds,
+      time_window_enabled,
+      start_time,
+      end_time,
+      punchout_min_minutes,
+      adminId || null,
+    ]
+  );
+
+  return res.rows[0];
+}
+
+
+function isWithinWindow(start, end) {
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+
+  const [sh, sm] = String(start).split(":").map(Number);
+  const [eh, em] = String(end).split(":").map(Number);
+
+  const startMin = sh * 60 + sm;
+  const endMin = eh * 60 + em;
+
+  // normal window
+  if (startMin <= endMin) return nowMin >= startMin && nowMin <= endMin;
+
+  // overnight window (example 22:00 - 02:00)
+  return nowMin >= startMin || nowMin <= endMin;
+}
+
+
+app.get("/api/admin/attendance/settings",
+  authenticateToken,
+  authorizeRole("admin"),
+  async (req, res) => {
+  try {
+    const settings = await getAttendanceSettings();
+    return res.json({ success: true, settings });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.put("/api/admin/attendance/settings",
+  authenticateToken,
+  authorizeRole("admin"),
+  async (req, res) => {
+  try {
+    const adminId = req.user?.id || req.admin?.id || req.user?.adminId;
+    const updated = await updateAttendanceSettings(req.body, adminId);
+    return res.json({ success: true, settings: updated });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+
+// app.get("/api/qr/generate", authenticateToken, async (req, res) => {
+//   try {
+//     const settings = await getAttendanceSettings();
+
+//     if (!settings.qr_enabled) {
+//       return res.status(403).json({ success: false, message: "QR attendance disabled by admin" });
+//     }
+
+//     const councilId = req.user?.councilId;
+//     const userId = req.user?.userId;
+
+//     if (!userId || !councilId) {
+//       return res.status(400).json({ success: false, message: "Invalid session" });
+//     }
+
+//     const expirySeconds = Number(settings.qr_expiry_seconds || 15);
+
+//     const payload = {
+//       userId,
+//       councilId,
+//       role: req.user.role,
+//       ts: Date.now(),
+//     };
+
+//     const token = jwt.sign(payload, process.env.QR_SECRET, { expiresIn: expirySeconds });
+
+//     return res.json({
+//       success: true,
+//       qr: token,
+//       expirySeconds,
+//     });
+//   } catch (err) {
+//     console.error("QR generate error:", err);
+//     return res.status(500).json({ success: false, message: "QR generation failed" });
+//   }
+// });
+
+const crypto = require("crypto");
+
+// ============================================
+// ✅ B) USER QR GENERATE API (JWT SIGNED)
+// ============================================
+app.get("/api/attendance/qr", authenticateToken, async (req, res) => {
+  try {
+    const { userId, councilId, role } = req.user;
+
+    const settings = await getAttendanceSettings();
+
+    // 1) Global QR enabled check
+    if (!settings.qr_enabled) {
+      return res.status(403).json({
+        success: false,
+        blocked: true,
+        message: "QR attendance is disabled by admin",
+      });
+    }
+
+    // 2) Attendance window check
+    if (settings.time_window_enabled) {
+      const ok = isWithinWindow(settings.start_time, settings.end_time);
+      if (!ok) {
+        return res.status(403).json({
+          success: false,
+          blocked: true,
+          message: `Attendance allowed only between ${settings.start_time} - ${settings.end_time}`,
+        });
+      }
+    }
+
+    // 3) User QR block check
+    const userRes = await pool.query(
+      `SELECT qr_blocked, qr_block_reason FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const { qr_blocked, qr_block_reason } = userRes.rows[0];
+
+    if (qr_blocked === true) {
+      return res.status(403).json({
+        success: false,
+        blocked: true,
+        message: qr_block_reason || "Your QR generation is blocked by admin",
+      });
+    }
+
+    // 4) Build signed QR payload
+    const expiresIn = Math.max(5, Number(settings.qr_expiry_seconds || 15));
+    const jti = crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
+
+    const qrToken = jwt.sign(
+      {
+        typ: "ATTENDANCE_QR",
+        uid: userId,
+        cid: councilId,
+        role: role,
+        jti,
+      },
+      QR_SECRET,
+      { expiresIn: expiresIn } // seconds
+    );
+
+    return res.json({
+      success: true,
+      qr: qrToken,
+      expiresIn,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("❌ /api/attendance/qr error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to generate QR",
+      error: err.message,
+    });
+  }
+});
+// ============================================
+
+// ============================================
+// ✅ C) ELECTRON KIOSK QR SCAN API (PUBLIC)
+// - verifies QR token
+// - anti-replay (jti unique)
+// - punch-in/punch-out with min rule
+// ============================================
+app.post("/api/attendance/kiosk/scan-qr", async (req, res) => {
+  try {
+    const { qr, kioskDeviceId } = req.body
+
+    if (!qr) {
+      return res.status(400).json({ success: false, message: "QR token required" })
+    }
+
+    // ✅ Verify token
+    let payload
+    try {
+      payload = jwt.verify(qr, QR_SECRET)
+    } catch (e) {
+      return res.status(401).json({ success: false, message: "Invalid or expired QR" })
+    }
+
+    if (payload?.typ !== "ATTENDANCE_QR") {
+      return res.status(401).json({ success: false, message: "Invalid QR type" })
+    }
+
+    const userId = payload.uid
+    const councilId = payload.cid
+    const jti = payload.jti
+
+    if (!userId || !councilId || !jti) {
+      return res.status(400).json({ success: false, message: "QR payload corrupted" })
+    }
+
+    // ✅ Settings
+    const settings = await getAttendanceSettings()
+
+    if (!settings.qr_enabled) {
+      return res.status(403).json({ success: false, message: "QR attendance disabled by admin" })
+    }
+
+    if (settings.time_window_enabled) {
+      const ok = isWithinWindow(settings.start_time, settings.end_time)
+      if (!ok) {
+        return res.status(403).json({
+          success: false,
+          message: `Attendance allowed only between ${settings.start_time} - ${settings.end_time}`,
+        })
+      }
+    }
+
+    // ✅ Anti replay
+    try {
+      await pool.query(
+        `
+        INSERT INTO qr_scan_events (jti, user_id, council_id, kiosk_device_id, result)
+        VALUES ($1, $2, $3, $4, $5)
+        `,
+        [jti, userId, councilId, kioskDeviceId || null, "RECEIVED"]
+      )
+    } catch (e) {
+      return res.status(409).json({
+        success: false,
+        message: "QR already scanned (refresh QR and try again)",
+      })
+    }
+
+    // ✅ User check
+    const userRes = await pool.query(
+      `
+      SELECT u.id, u.council_id, u.qr_blocked, u.qr_block_reason,
+             up.name, up.committee_name
+      FROM users u
+      LEFT JOIN user_profiles up ON up.council_id = u.council_id
+      WHERE u.id=$1 AND u.council_id=$2
+      LIMIT 1
+      `,
+      [userId, councilId]
+    )
+
+    if (userRes.rows.length === 0) {
+      await pool.query(`UPDATE qr_scan_events SET result='USER_NOT_FOUND' WHERE jti=$1`, [jti])
+      return res.status(404).json({ success: false, message: "User not found" })
+    }
+
+    const user = userRes.rows[0]
+
+    if (user.qr_blocked === true) {
+      await pool.query(`UPDATE qr_scan_events SET result='USER_BLOCKED' WHERE jti=$1`, [jti])
+      return res.status(403).json({
+        success: false,
+        message: user.qr_block_reason || "User QR is blocked by admin",
+      })
+    }
+
+    const minPunchout = Math.max(1, Number(settings.punchout_min_minutes || 30))
+
+    // ✅ Check active record
+    const activeRes = await pool.query(
+      `
+      SELECT 
+        id,
+        punch_in,
+        FLOOR(EXTRACT(EPOCH FROM (NOW() - punch_in)) / 60) AS duration_minutes
+      FROM attendance_logs
+      WHERE user_id = $1
+        AND DATE(punch_in) = CURRENT_DATE
+        AND status = 'punched_in'
+      ORDER BY punch_in DESC
+      LIMIT 1
+      `,
+      [userId]
+    )
+
+    // ✅ PUNCH IN
+    if (activeRes.rows.length === 0) {
+      const inserted = await pool.query(
+        `
+        INSERT INTO attendance_logs (user_id, punch_in, status, biometric_verified, biometric_quality)
+        VALUES ($1, NOW(), 'punched_in', true, 100)
+        RETURNING *
+        `,
+        [userId]
+      )
+
+      await pool.query(`UPDATE qr_scan_events SET result='PUNCH_IN' WHERE jti=$1`, [jti])
+
+      emitAttendanceUpdate({
+        type: "punch_in",
+        userId,
+        councilId,
+        name: user.name || "Unknown",
+        committee: user.committee_name || "",
+        timestamp: new Date().toISOString(),
+      })
+
+      return res.json({
+        success: true,
+        action: "punch_in",
+        message: "✅ Punch-in recorded",
+        member: {
+          userId,
+          council_id: councilId,
+          name: user.name || "Unknown",
+          committee: user.committee_name || "",
+          punch_in: inserted.rows[0].punch_in,
+        },
+      })
+    }
+
+    // ✅ PUNCH OUT
+    const active = activeRes.rows[0]
+    const durationMinutes = Number(active.duration_minutes || 0)
+
+    if (durationMinutes < minPunchout) {
+      await pool.query(`UPDATE qr_scan_events SET result='PUNCHOUT_BLOCKED' WHERE jti=$1`, [jti])
+
+      return res.status(400).json({
+        success: false,
+        action: "blocked",
+        message: `Need to work ${minPunchout} minutes. Current: ${durationMinutes}`,
+        remaining_minutes: minPunchout - durationMinutes,
+        member: {
+          userId,
+          council_id: councilId,
+          name: user.name || "Unknown",
+          committee: user.committee_name || "",
+          punch_in: active.punch_in,
+        },
+      })
+    }
+
+    const updated = await pool.query(
+      `
+      UPDATE attendance_logs
+      SET punch_out = NOW(),
+          status = 'completed',
+          biometric_verified = true,
+          biometric_quality = 100
+      WHERE id = $1
+      RETURNING *
+      `,
+      [active.id]
+    )
+
+    await pool.query(`UPDATE qr_scan_events SET result='PUNCH_OUT' WHERE jti=$1`, [jti])
+
+    emitAttendanceUpdate({
+      type: "punch_out",
+      userId,
+      councilId,
+      name: user.name || "Unknown",
+      committee: user.committee_name || "",
+      timestamp: new Date().toISOString(),
+    })
+
+    return res.json({
+      success: true,
+      action: "punch_out",
+      message: "✅ Punch-out recorded",
+      duration_minutes: durationMinutes,
+      member: {
+        userId,
+        council_id: councilId,
+        name: user.name || "Unknown",
+        committee: user.committee_name || "",
+        punch_in: updated.rows[0].punch_in,
+        punch_out: updated.rows[0].punch_out,
+      },
+    })
+  } catch (err) {
+    console.error("❌ /api/attendance/kiosk/scan-qr error:", err.message)
+    return res.status(500).json({
+      success: false,
+      message: "Failed to scan QR",
+      error: err.message,
+    })
+  }
+})
+
+// app.post("/api/attendance/kiosk/scan-qr", async (req, res) => {
+//   try {
+//     const { qr, kioskDeviceId } = req.body;
+
+//     if (!qr) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "QR token required",
+//       });
+//     }
+
+//     // 1) verify token
+//     let payload;
+//     try {
+//       payload = jwt.verify(qr, QR_SECRET);
+//     } catch (e) {
+//       return res.status(401).json({
+//         success: false,
+//         message: "Invalid or expired QR",
+//       });
+//     }
+
+//     // Must be our attendance qr
+//     if (payload?.typ !== "ATTENDANCE_QR") {
+//       return res.status(401).json({
+//         success: false,
+//         message: "Invalid QR type",
+//       });
+//     }
+
+//     const userId = payload.uid;
+//     const councilId = payload.cid;
+//     const jti = payload.jti;
+
+//     if (!userId || !councilId || !jti) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "QR payload corrupted",
+//       });
+//     }
+
+//     // 2) Load admin settings
+//     const settings = await getAttendanceSettings();
+
+//     if (!settings.qr_enabled) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "QR attendance disabled by admin",
+//       });
+//     }
+
+//     // 3) Attendance window check
+//     if (settings.time_window_enabled) {
+//       const ok = isWithinWindow(settings.start_time, settings.end_time);
+//       if (!ok) {
+//         return res.status(403).json({
+//           success: false,
+//           message: `Attendance allowed only between ${settings.start_time} - ${settings.end_time}`,
+//         });
+//       }
+//     }
+
+//     // 4) Anti replay check (same QR token cannot be scanned twice)
+//     try {
+//       await pool.query(
+//         `
+//         INSERT INTO qr_scan_events (jti, user_id, council_id, kiosk_device_id, result)
+//         VALUES ($1, $2, $3, $4, $5)
+//         `,
+//         [jti, userId, councilId, kioskDeviceId || null, "RECEIVED"]
+//       );
+//     } catch (e) {
+//       return res.status(409).json({
+//         success: false,
+//         message: "QR already scanned (refresh QR and try again)",
+//       });
+//     }
+
+//     // 5) Check user exists + QR block flag
+//     const userRes = await pool.query(
+//       `
+//       SELECT u.id, u.council_id, u.qr_blocked, u.qr_block_reason,
+//              up.name, up.committee_name
+//       FROM users u
+//       LEFT JOIN user_profiles up ON up.council_id = u.council_id
+//       WHERE u.id=$1 AND u.council_id=$2
+//       LIMIT 1
+//       `,
+//       [userId, councilId]
+//     );
+
+//     if (userRes.rows.length === 0) {
+//       await pool.query(`UPDATE qr_scan_events SET result='USER_NOT_FOUND' WHERE jti=$1`, [jti]);
+//       return res.status(404).json({ success: false, message: "User not found" });
+//     }
+
+//     const user = userRes.rows[0];
+
+//     if (user.qr_blocked === true) {
+//       await pool.query(`UPDATE qr_scan_events SET result='USER_BLOCKED' WHERE jti=$1`, [jti]);
+//       return res.status(403).json({
+//         success: false,
+//         message: user.qr_block_reason || "User QR is blocked by admin",
+//       });
+//     }
+
+//     const minPunchout = Math.max(0, Number(settings.punchout_min_minutes || 30));
+
+//     // 6) Check active punched_in record today
+//  const activeRes = await pool.query(
+//       `
+//       SELECT id, punch_in
+//       FROM attendance_logs
+//       WHERE user_id=$1
+//         AND DATE(punch_in) = CURRENT_DATE
+//         AND status='punched_in'
+//       ORDER BY punch_in DESC
+//       LIMIT 1
+//       `,
+//       [userId]
+//     )
+
+//     // ✅ PUNCH IN FLOW
+//     // If NO active punched_in record exists -> insert punch in
+//     if (activeRes.rows.length === 0) {
+//       // ✅ EXTRA PROTECTION: ensure user doesn't already have punched_in today
+//       // (just in case some race condition happens)
+//       const checkAgain = await pool.query(
+//         `
+//         SELECT id, punch_in
+//         FROM attendance_logs
+//         WHERE user_id=$1
+//           AND DATE(punch_in) = CURRENT_DATE
+//           AND status='punched_in'
+//         ORDER BY punch_in DESC
+//         LIMIT 1
+//         `,
+//         [userId]
+//       )
+
+//       if (checkAgain.rows.length > 0) {
+//         await pool.query(
+//           `UPDATE qr_scan_events SET result='ALREADY_PUNCHED_IN' WHERE jti=$1`,
+//           [jti]
+//         )
+
+//         return res.status(400).json({
+//           success: false,
+//           action: "already_in",
+//           message: "⚠️ Already punched in. Please wait before punching out.",
+//           member: {
+//             userId,
+//             council_id: councilId,
+//             name: user.name || "Unknown",
+//             committee: user.committee_name || "",
+//             punch_in: checkAgain.rows[0].punch_in,
+//           },
+//         })
+//       }
+
+//       const inserted = await pool.query(
+//         `
+//         INSERT INTO attendance_logs (user_id, punch_in, status, biometric_verified, biometric_quality)
+//         VALUES ($1, NOW(), 'punched_in', true, 100)
+//         RETURNING *
+//         `,
+//         [userId]
+//       )
+
+//       await pool.query(
+//         `UPDATE qr_scan_events SET result='PUNCH_IN' WHERE jti=$1`,
+//         [jti]
+//       )
+
+//       // 🔥 socket event
+//       emitAttendanceUpdate({
+//         type: "punch_in",
+//         userId,
+//         councilId,
+//         name: user.name || "Unknown",
+//         committee: user.committee_name || "",
+//         timestamp: new Date().toISOString(),
+//       })
+
+//       return res.json({
+//         success: true,
+//         action: "punch_in",
+//         message: "✅ Punch-in recorded",
+//         member: {
+//           userId,
+//           council_id: councilId,
+//           name: user.name || "Unknown",
+//           committee: user.committee_name || "",
+//           punch_in: inserted.rows[0].punch_in,
+//         },
+//       })
+//     }
+//     // ✅ PUNCH OUT FLOW
+//     const active = activeRes.rows[0];
+//     const punchInTime = new Date(active.punch_in);
+//     const now = new Date();
+//     const durationMinutes = Math.floor((now - punchInTime) / 60000);
+
+//     if (durationMinutes < minPunchout) {
+//       await pool.query(`UPDATE qr_scan_events SET result='PUNCHOUT_BLOCKED' WHERE jti=$1`, [jti]);
+//       return res.status(400).json({
+//         success: false,
+//         action: "blocked",
+//         message: `Need to work ${minPunchout} minutes. Current: ${durationMinutes}`,
+//         remaining_minutes: minPunchout - durationMinutes,
+//       });
+//     }
+
+//     const updated = await pool.query(
+//       `
+//       UPDATE attendance_logs
+//       SET punch_out = NOW(),
+//           status = 'completed',
+//           biometric_verified = true,
+//           biometric_quality = 100
+//       WHERE id = $1
+//       RETURNING *
+//       `,
+//       [active.id]
+//     );
+
+//     await pool.query(`UPDATE qr_scan_events SET result='PUNCH_OUT' WHERE jti=$1`, [jti]);
+
+//     emitAttendanceUpdate({
+//       type: "punch_out",
+//       userId,
+//       councilId,
+//       name: user.name || "Unknown",
+//       committee: user.committee_name || "",
+//       timestamp: new Date().toISOString(),
+//     });
+
+//     return res.json({
+//       success: true,
+//       action: "punch_out",
+//       message: "✅ Punch-out recorded",
+//       duration_minutes: durationMinutes,
+//       member: {
+//         userId,
+//         council_id: councilId,
+//         name: user.name || "Unknown",
+//         committee: user.committee_name || "",
+//         punch_in: updated.rows[0].punch_in,
+//         punch_out: updated.rows[0].punch_out,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("❌ /api/attendance/kiosk/scan-qr error:", err.message);
+//     return res.status(500).json({
+//       success: false,
+//       message: "Failed to scan QR",
+//       error: err.message,
+//     });
+//   }
+// });
+// ============================================
+// ✅ D) ADMIN QR BLOCK/UNBLOCK USER
+// ============================================
+app.put(
+  "/api/admin/users/:userId/qr-block",
+  authenticateToken,
+  authorizeRole("admin"),
+  async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { blocked, reason } = req.body;
+
+      const value = blocked === true;
+
+      const result = await pool.query(
+        `
+        UPDATE users
+        SET qr_blocked = $1,
+            qr_block_reason = $2,
+            qr_blocked_at = CASE WHEN $1=true THEN NOW() ELSE NULL END
+        WHERE id = $3
+        RETURNING id, council_id, qr_blocked, qr_block_reason, qr_blocked_at
+        `,
+        [value, reason || null, userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
+      const row = result.rows[0];
+
+      // ✅ log
+      await createSystemLog(
+        pool,
+        req.user.userId,
+        req.user.role,
+        value ? "QR_BLOCK" : "QR_UNBLOCK",
+        "USER",
+        row.id,
+        `${value ? "Blocked" : "Unblocked"} QR for councilId=${row.council_id} ${
+          reason ? `Reason: ${reason}` : ""
+        }`,
+        value ? "WARNING" : "INFO"
+      );
+
+      return res.json({
+        success: true,
+        message: value ? "✅ User QR blocked" : "✅ User QR unblocked",
+        user: row,
+      });
+    } catch (err) {
+      console.error("❌ /api/admin/users/:userId/qr-block error:", err.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to update user QR block",
+        error: err.message,
+      });
+    }
+  }
+);
+// ============================================
+// ✅ ADMIN: LIST USERS WITH QR STATUS
+// ============================================
+app.get(
+  "/api/admin/users/qr-status",
+  authenticateToken,
+  authorizeRole("admin"),
+  async (req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          u.id AS user_id,
+          u.council_id,
+          u.role,
+          u.qr_blocked,
+          u.qr_block_reason,
+          u.qr_blocked_at,
+          up.name,
+          up.committee_name
+        FROM users u
+        LEFT JOIN user_profiles up ON up.council_id = u.council_id
+        WHERE u.is_active = true
+        ORDER BY up.name ASC NULLS LAST
+      `);
+
+      return res.json({
+        success: true,
+        count: result.rows.length,
+        users: result.rows,
+      });
+    } catch (err) {
+      console.error("❌ /api/admin/users/qr-status error:", err.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to load QR status list",
+        error: err.message,
+      });
+    }
+  }
+);
+
 
 
 // ============================================
 // 2. PUBLIC KIOSK PUNCH-IN (No auth required)
 // ============================================
-app.post('/api/attendance/kiosk/punch-in', async (req, res) => {
-  try {
-    const { fingerprintTemplate } = req.body;
+// app.post("/api/attendance/kiosk/punch-in", async (req, res) => {
+//   try {
+//     const { councilId, score } = req.body;
 
-    if (!fingerprintTemplate) {
-      return res.status(400).json({ success: false, message: "fingerprintTemplate required" });
-    }
+//     if (!councilId) {
+//       return res.status(400).json({ success: false, message: "councilId required" });
+//     }
 
-    const matchedUser = await findMatchedUserByFingerprint(pool, fingerprintTemplate);
-    if (!matchedUser) {
-      return res.status(401).json({ success: false, message: "Fingerprint not recognized" });
-    }
+//     // ✅ DIRECT USER LOOKUP
+//     const userRes = await pool.query(`
+//       SELECT 
+//         u.id AS user_id,
+//         u.council_id,
+//         up.name,
+//         up.committee_name
+//       FROM users u
+//       LEFT JOIN user_profiles up ON up.council_id = u.council_id
+//       WHERE u.council_id = $1
+//       LIMIT 1
+//     `, [councilId]);
 
-    const existing = await pool.query(`
-      SELECT id, punch_in
-      FROM attendance_logs
-      WHERE user_id = $1
-        AND DATE(punch_in) = CURRENT_DATE
-        AND status = 'punched_in'
-      LIMIT 1
-    `, [matchedUser.userId]);
+//     if (userRes.rows.length === 0) {
+//       return res.status(401).json({ success: false, message: "User not found" });
+//     }
 
-    if (existing.rows.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Already punched in. Please punch out first.",
-        existing_punch_in: existing.rows[0].punch_in
-      });
-    }
+//     const matchedUser = {
+//       userId: userRes.rows[0].user_id,
+//       councilId: userRes.rows[0].council_id,
+//       name: userRes.rows[0].name || "Unknown",
+//       committee: userRes.rows[0].committee_name || "",
+//       matchScore: score || 0,
+//     };
 
-    const inserted = await pool.query(`
-      INSERT INTO attendance_logs (user_id, punch_in, status, biometric_verified, biometric_quality)
-      VALUES ($1, NOW(), 'punched_in', true, $2)
-      RETURNING *
-    `, [matchedUser.userId, matchedUser.matchScore]);
+//     // ✅ CHECK ALREADY IN
+//     const existing = await pool.query(`
+//       SELECT id, punch_in
+//       FROM attendance_logs
+//       WHERE user_id = $1
+//         AND DATE(punch_in) = CURRENT_DATE
+//         AND status = 'punched_in'
+//       LIMIT 1
+//     `, [matchedUser.userId]);
 
-    const attendance = inserted.rows[0];
+//     if (existing.rows.length > 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "Already punched in. Please punch out first.",
+//         existing_punch_in: existing.rows[0].punch_in
+//       });
+//     }
 
-    emitAttendanceUpdate({
-      type: "punch_in",
-      userId: matchedUser.userId,
-      councilId: matchedUser.councilId,
-      name: matchedUser.name,
-      committee: matchedUser.committee,
-      attendance,
-      timestamp: new Date().toISOString(),
-    });
+//     // ✅ INSERT NEW PUNCH-IN
+//     const inserted = await pool.query(`
+//       INSERT INTO attendance_logs (user_id, punch_in, status, biometric_verified, biometric_quality)
+//       VALUES ($1, NOW(), 'punched_in', true, $2)
+//       RETURNING *
+//     `, [matchedUser.userId, matchedUser.matchScore]);
 
-    return res.json({
-      success: true,
-      message: "Punch-in recorded",
-      member: {
-        userId: matchedUser.userId,
-        council_id: matchedUser.councilId,
-        name: matchedUser.name,
-        committee: matchedUser.committee,
-        punch_in: attendance.punch_in
-      }
-    });
+//     const attendance = inserted.rows[0];
 
-  } catch (err) {
-    console.error("kiosk punch-in error:", err);
-    return res.status(500).json({ success: false, message: "Failed punch-in" });
-  }
-});
+//     return res.json({
+//       success: true,
+//       message: "Punch-in recorded",
+//       member: {
+//         userId: matchedUser.userId,
+//         council_id: matchedUser.councilId,
+//         name: matchedUser.name,
+//         committee: matchedUser.committee,
+//         punch_in: attendance.punch_in
+//       }
+//     });
+//   } catch (err) {
+//     console.error("kiosk punch-in error:", err);
+//     return res.status(500).json({ success: false, message: "Failed punch-in" });
+//   }
+// });
 
-// ============================================
-// 3. PUBLIC KIOSK PUNCH-OUT (No auth required)
-// ============================================
-app.post('/api/attendance/kiosk/punch-out', async (req, res) => {
-  try {
-    const { fingerprintTemplate } = req.body;
 
-    if (!fingerprintTemplate) {
-      return res.status(400).json({ success: false, message: "fingerprintTemplate required" });
-    }
 
-    const matchedUser = await findMatchedUserByFingerprint(pool, fingerprintTemplate);
-    if (!matchedUser) {
-      return res.status(401).json({ success: false, message: "Fingerprint not recognized" });
-    }
+// // ============================================
+// // 3. PUBLIC KIOSK PUNCH-OUT (No auth required)
+// // ✅ UPDATED: councilId based (NEW FLOW)
+// // ============================================
+// app.post("/api/attendance/kiosk/punch-out", async (req, res) => {
+//   try {
+//     const { councilId, score } = req.body;
 
-    const active = await pool.query(`
-      SELECT id, punch_in
-      FROM attendance_logs
-      WHERE user_id = $1
-        AND DATE(punch_in) = CURRENT_DATE
-        AND status = 'punched_in'
-      LIMIT 1
-    `, [matchedUser.userId]);
+//     if (!councilId) {
+//       return res.status(400).json({ success: false, message: "councilId required" });
+//     }
 
-    if (active.rows.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: "No active punch-in found"
-      });
-    }
+//     // ✅ DIRECT USER LOOKUP
+//     const userRes = await pool.query(`
+//       SELECT 
+//         u.id AS user_id,
+//         u.council_id,
+//         up.name,
+//         up.committee_name
+//       FROM users u
+//       LEFT JOIN user_profiles up ON up.council_id = u.council_id
+//       WHERE u.council_id = $1
+//       LIMIT 1
+//     `, [councilId]);
 
-    const punchInTime = new Date(active.rows[0].punch_in);
-    const now = new Date();
-    const durationMinutes = Math.floor((now - punchInTime) / 60000);
+//     if (userRes.rows.length === 0) {
+//       return res.status(401).json({ success: false, message: "User not found" });
+//     }
 
-    if (durationMinutes < 30) {
-      return res.status(400).json({
-        success: false,
-        message: `Need to work 30 minutes. Current: ${durationMinutes}`,
-        remaining_minutes: 30 - durationMinutes
-      });
-    }
+//     const userId = userRes.rows[0].user_id;
+//     const name = userRes.rows[0].name || "Unknown";
+//     const committee = userRes.rows[0].committee_name || "";
 
-    const updated = await pool.query(`
-      UPDATE attendance_logs
-      SET punch_out = NOW(), status = 'completed', biometric_verified = true
-      WHERE id = $1
-      RETURNING *
-    `, [active.rows[0].id]);
+//     // ✅ FIND ACTIVE PUNCH-IN
+//     const active = await pool.query(`
+//       SELECT id, punch_in
+//       FROM attendance_logs
+//       WHERE user_id = $1
+//         AND DATE(punch_in) = CURRENT_DATE
+//         AND status = 'punched_in'
+//       LIMIT 1
+//     `, [userId]);
 
-    const attendance = updated.rows[0];
+//     if (active.rows.length === 0) {
+//       return res.status(400).json({
+//         success: false,
+//         message: "No active punch-in found"
+//       });
+//     }
 
-    emitAttendanceUpdate({
-      type: "punch_out",
-      userId: matchedUser.userId,
-      councilId: matchedUser.councilId,
-      name: matchedUser.name,
-      committee: matchedUser.committee,
-      attendance,
-      timestamp: new Date().toISOString(),
-    });
+//     const punchInTime = new Date(active.rows[0].punch_in);
+//     const now = new Date();
+//     const durationMinutes = Math.floor((now - punchInTime) / 60000);
 
-    return res.json({
-      success: true,
-      message: "Punch-out recorded",
-      duration_minutes: durationMinutes,
-      member: {
-        userId: matchedUser.userId,
-        council_id: matchedUser.councilId,
-        name: matchedUser.name,
-        committee: matchedUser.committee,
-        punch_in: attendance.punch_in,
-        punch_out: attendance.punch_out
-      }
-    });
+//     if (durationMinutes < 30) {
+//       return res.status(400).json({
+//         success: false,
+//         message: `Need to work 30 minutes. Current: ${durationMinutes}`,
+//         remaining_minutes: 30 - durationMinutes
+//       });
+//     }
 
-  } catch (err) {
-    console.error("kiosk punch-out error:", err);
-    return res.status(500).json({ success: false, message: "Failed punch-out" });
-  }
-});
+//     // ✅ UPDATE TO COMPLETED
+//     const updated = await pool.query(`
+//       UPDATE attendance_logs
+//       SET punch_out = NOW(), status = 'completed',
+//           biometric_verified = true,
+//           biometric_quality = $2
+//       WHERE id = $1
+//       RETURNING *
+//     `, [active.rows[0].id, score || 0]);
+
+//     const attendance = updated.rows[0];
+
+//     return res.json({
+//       success: true,
+//       message: "Punch-out recorded",
+//       duration_minutes: durationMinutes,
+//       member: {
+//         userId,
+//         council_id: councilId,
+//         name,
+//         committee,
+//         punch_in: attendance.punch_in,
+//         punch_out: attendance.punch_out
+//       }
+//     });
+//   } catch (err) {
+//     console.error("kiosk punch-out error:", err);
+//     return res.status(500).json({ success: false, message: "Failed punch-out" });
+//   }
+// });
+
 
 // ============================================
 // 4. BIOMETRIC DETAILED MATCHING
-// ============================================
-app.get('/api/biometrics/enrolled', authenticateToken, authorizeRole('admin'), async (req, res) => {
+// ============================================ 
+
+
+// ✅ Save folder for templates
+const ANSI_DIR = path.join(os.homedir(), ".council-attendance", "templates");
+if (!fs.existsSync(ANSI_DIR)) fs.mkdirSync(ANSI_DIR, { recursive: true });
+
+app.post("/api/biometric/enroll-save", authenticateToken, authorizeRole("admin"), async (req, res) => {
+  try {
+    const { user_id, council_id, name, committee_name, ansi_base64 } = req.body;
+
+    if (!user_id || !council_id || !ansi_base64) {
+      return res.status(400).json({
+        success: false,
+        error: "user_id, council_id, ansi_base64 required",
+      });
+    }
+
+    const ansiBuffer = Buffer.from(ansi_base64, "base64");
+    if (ansiBuffer.length < 50) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid ANSI template data",
+      });
+    }
+
+    const safeCouncilId = String(council_id).replace(/[^\w-]/g, "_");
+    const safeUserId = String(user_id).replace(/[^\w-]/g, "_");
+
+    const fileName = `${safeCouncilId}_${safeUserId}_${Date.now()}.ansi`;
+    const filePath = path.join(ANSI_DIR, fileName);
+
+    fs.writeFileSync(filePath, ansiBuffer);
+
+    // ✅ POSTGRES QUERY ✅
+    const result = await pool.query(
+      `
+      INSERT INTO biometric_enrollments
+        (user_id, council_id, name, committee_name, ansi_path, created_at)
+      VALUES
+        ($1, $2, $3, $4, $5, NOW())
+      RETURNING id, ansi_path
+      `,
+      [user_id, council_id, name || "", committee_name || "", filePath]
+    );
+
+    return res.json({
+      success: true,
+      message: "✅ ANSI saved",
+      insertedId: result.rows[0].id,
+      ansi_path: result.rows[0].ansi_path,
+    });
+  } catch (err) {
+    console.error("❌ /api/biometric/enroll-save error:", err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
+
+app.get("/api/biometric/enrolled", authenticateToken, authorizeRole("admin"), async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
-        br.user_id,
-        br.council_id,
-        br.fingerprint_template,
-        up.name,
-        up.committee_name
-      FROM biometric_registrations br
-      JOIN user_profiles up ON up.council_id = br.council_id
-      WHERE br.is_active = true
-      ORDER BY up.name
+        id,
+        user_id,
+        council_id,
+        name,
+        committee_name,
+        ansi_path,
+        created_at
+      FROM biometric_enrollments
+      WHERE ansi_path IS NOT NULL
+      ORDER BY id DESC
     `);
 
-    res.json({
+    const rows = result.rows || [];
+
+    return res.json({
       success: true,
-      enrolled: result.rows
+      count: rows.length,
+      data: rows,
     });
   } catch (err) {
-    console.error('Enrolled biometrics error:', err);
-    res.status(500).json({ success: false, message: 'Failed to load enrolled biometrics' });
+    console.error("❌ /api/biometric/enrolled error:", err.message);
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
   }
 });
+
+
 // ============================================
 // 5. TODAY'S LIVE ATTENDANCE
 // ============================================
-app.get('/api/attendance/today/live', authenticateToken, authorizeRole('admin'), async (req, res) => {
+app.get("/api/attendance/today/live", authenticateToken, async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT
+      SELECT 
+        al.id,
         u.council_id,
         up.name,
-        up.committee_name,
+        up.committee_name AS committee,
+        al.status,
         al.punch_in,
-        al.biometric_quality,
-        EXTRACT(EPOCH FROM (NOW() - al.punch_in)) / 60 AS duration_minutes
+        al.punch_out,
+        EXTRACT(EPOCH FROM (COALESCE(al.punch_out, NOW()) - al.punch_in))/60 AS duration_minutes,
+        al.biometric_quality
       FROM attendance_logs al
       JOIN users u ON u.id = al.user_id
-      JOIN user_profiles up ON up.council_id = u.council_id
+      LEFT JOIN user_profiles up ON up.council_id = u.council_id
       WHERE DATE(al.punch_in) = CURRENT_DATE
-        AND al.status = 'punched_in'
       ORDER BY al.punch_in DESC
-    `);
+    `)
 
-    const presentCount = result.rows.length;
-
-    // Get total members
-    const totalResult = await pool.query(`
-      SELECT COUNT(DISTINCT u.id) as total FROM users u WHERE u.is_active = true
-    `);
-
-    const totalMembers = parseInt(totalResult.rows[0].total);
-    const attendanceRate = totalMembers > 0 
-      ? Math.round((presentCount / totalMembers) * 100) 
-      : 0;
-
-    res.json({
+    return res.json({
       success: true,
-      present: result.rows.map(row => ({
-        council_id: row.council_id,
-        name: row.name,
-        committee: row.committee_name,
-        punch_in: row.punch_in,
-        duration_minutes: Math.floor(row.duration_minutes),
-        biometric_quality: row.biometric_quality
-      })),
-      total_present: presentCount,
-      total_members: totalMembers,
-      attendance_rate: attendanceRate,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error('Live attendance error:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Failed to fetch live attendance',
-      error: error.message 
-    });
+      records: result.rows,
+    })
+  } catch (err) {
+    console.error("today live error:", err)
+    res.status(500).json({ success: false, message: "Failed to fetch live records" })
   }
-});
+})
+
+
 
 // ============================================
 // 6. VALIDATE PUNCH-OUT (30-min rule)
@@ -3091,6 +3965,7 @@ app.get('/api/admin/all-members', authenticateToken, authorizeRole('admin'), asy
   try {
     const result = await pool.query(`
       SELECT 
+        u.id AS user_id, 
         u.council_id,
         up.name,
         up.committee_name,

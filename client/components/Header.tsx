@@ -12,7 +12,10 @@ import {
   X,
   Menu,
   Bell,
-  Settings
+  Info,
+  Bug,
+  Linkedin,
+  Code
 } from 'lucide-react'
 
 interface UserType {
@@ -28,6 +31,103 @@ interface HeaderProps {
   onMenuClick?: () => void
   onProfileClick?: () => void
   onLogout?: () => void
+}
+
+// --- NEW: About Popup Component (Visible on Mobile) ---
+function AboutPopup() {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="relative">
+      <motion.button
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
+        onClick={() => setOpen(!open)}
+        // CHANGED: Removed 'hidden sm:flex' so it shows on mobile too
+        className={`flex rounded-xl p-2 transition-all ${
+          open ? 'bg-[#252525] text-orange-500' : 'text-gray-400 hover:bg-[#252525] hover:text-orange-500'
+        }`}
+      >
+        <Info className="w-5 h-5" />
+      </motion.button>
+
+      <AnimatePresence>
+        {open && (
+          <>
+            <div 
+              className="fixed inset-0 z-40"
+              onClick={() => setOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              // Adjusted width for mobile screens (w-72 on mobile, w-80 on desktop)
+              className="absolute right-0 top-full mt-3 w-72 sm:w-80 rounded-2xl border border-orange-500/20 bg-[#252525] shadow-2xl z-50 overflow-hidden backdrop-blur-xl"
+            >
+              {/* Header */}
+              <div className="bg-gradient-to-r from-orange-600/10 to-transparent px-5 py-4 border-b border-orange-500/10">
+                <div className="flex items-center gap-2 text-orange-500 mb-1">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span className="text-xs font-black uppercase tracking-widest">System Info</span>
+                </div>
+                <h3 className="text-white font-bold">COUNCIL ERP WEB</h3>
+                <p className="text-[10px] text-gray-400 font-mono mt-0.5">Edition V.1.0.26</p>
+              </div>
+
+              {/* Body Content */}
+              <div className="p-5 space-y-5">
+                
+                {/* Status Message */}
+                <div className="text-sm text-gray-300 leading-relaxed">
+                  <p>This Web ERP is created and currently in <span className="text-white font-bold  px-1 rounded">Testing Phase 1</span>.</p>
+                </div>
+
+                {/* Developer Credit */}
+                <div className="bg-[#1A1A1A] rounded-xl p-3 border border-orange-500/5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Code className="w-3 h-3 text-orange-500" />
+                    <span className="text-[10px] uppercase font-bold text-gray-500">Developed By</span>
+                  </div>
+                  <p className="text-white font-bold text-sm">Vikas Jha</p>
+                  <p className="text-xs text-gray-400">Tech Secretary</p>
+                  <p className="text-xs text-gray-500 mb-2">Tech Community 2025-26</p>
+                  
+                  <a 
+                    href="https://www.linkedin.com/in/vikas-jha-figdes" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors mt-1"
+                  >
+                    <Linkedin className="w-3 h-3" />
+                    linkedin.com/in/vikas-jha
+                  </a>
+                </div>
+
+                {/* Report Issue */}
+                <div className="pt-2 border-t border-white/5">
+                  <div className="flex items-start gap-3">
+                    <Bug className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-white mb-0.5">Report Issues</p>
+                      <p className="text-xs text-gray-400">
+                        Found a bug? Contact us at:
+                        <a href="mailto:tech@gandhinagaruni.ac.in" className="block text-orange-500 hover:underline mt-0.5">
+                          tech@gandhinagaruni.ac.in
+                        </a>
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+    </div>
+  )
 }
 
 // Real NotificationBell component with centralized Socket.io
@@ -237,14 +337,14 @@ export default function Header({ user, onMenuClick, onProfileClick, onLogout }: 
             <motion.div 
               whileHover={{ scale: 1.05, rotate: 5 }}
               whileTap={{ scale: 0.95 }}
-              className="hidden lg:flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-orange-600 shadow-lg shadow-orange-500/30 shrink-0"
+              className="hidden lg:flex items-center justify-center"
             >
-              <ShieldCheck className="text-white w-6 h-6" />
+              <img src="/favicon_io/logoerp.svg" alt="Logo" className="w-18 h-16" />
             </motion.div>
 
             <div className="hidden sm:flex flex-col">
               <h2 className="font-black text-white tracking-tight text-base sm:text-lg leading-tight">
-                COUNCIL <span className="text-orange-500">ERP</span>
+                COUNCIL <span className="text-[#FF9800]">ERP</span>
               </h2>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="relative flex h-1.5 w-1.5">
@@ -308,13 +408,8 @@ export default function Header({ user, onMenuClick, onProfileClick, onLogout }: 
               <NotificationBell />
             </div>
 
-            <motion.button
-              whileHover={{ scale: 1.05, rotate: 90 }}
-              whileTap={{ scale: 0.95 }}
-              className="hidden sm:flex rounded-xl p-2 text-gray-400 transition-all hover:bg-[#252525] hover:text-orange-500"
-            >
-              <Settings className="w-5 h-5" />
-            </motion.button>
+            {/* About Popup - Now Visible on Mobile */}
+            <AboutPopup />
 
             {/* User Profile Section */}
             <div className="flex items-center gap-2 sm:gap-3 border-l border-orange-500/10 pl-2 sm:pl-3">
@@ -366,7 +461,7 @@ export default function Header({ user, onMenuClick, onProfileClick, onLogout }: 
 
                         <div className="p-2">
                           <MenuItem icon={User} label="Profile" onClick={handleProfileClick} />
-                          <MenuItem icon={Settings} label="Settings" onClick={() => setShowUserMenu(false)} />
+                          <MenuItem icon={Bug} label="Report Bug" onClick={() => window.open('mailto:tech@gandhinagaruni.ac.in')} />
                           <div className="my-2 border-t border-orange-500/10" />
                           <MenuItem icon={LogOut} label="Logout" onClick={handleLogout} danger />
                         </div>

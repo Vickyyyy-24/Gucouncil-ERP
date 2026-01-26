@@ -39,7 +39,11 @@ export default function NotificationBell() {
       ])
     })
 
-    return () => socket.disconnect()
+    const cleanup = () => {
+      socket.disconnect()
+    }
+
+    return cleanup
   }, [])
 
   const toggle = () => {
@@ -50,6 +54,7 @@ export default function NotificationBell() {
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={toggle}
         className="relative p-2 rounded-full hover:bg-slate-100"
       >

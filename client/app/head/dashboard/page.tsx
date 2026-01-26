@@ -8,6 +8,7 @@ import { toast } from 'react-toastify'
 
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
+import UserAttendanceQR from '@/components/common/UserAttendanceQR'
 
 // Head / Member Components
 import CommitteeInsights from '@/components/head/CommitteeInsights'
@@ -153,6 +154,7 @@ export default function HeadDashboard() {
     { id: 'insights', label: 'Committee Insights', icon: 'BarChart3' },
     { id: 'committee', label: 'Committee Activity', icon: 'Users' },
     { id: 'profile', label: 'My Profile', icon: 'UserCircle' },
+    { id: 'qr', label: 'QR Attendance', icon: 'QrCode' },
     { id: 'attendance', label: 'Attendance', icon: 'Clock' },
     { id: 'reports', label: 'Work Reports', icon: 'FileText' },
     { id: 'leaves', label: 'Apply Leave', icon: 'Calendar' },
@@ -169,6 +171,8 @@ export default function HeadDashboard() {
         return <CommitteeActivityPage />
       case 'profile':
         return <MemberProfile />
+      case 'qr':
+        return <UserAttendanceQR />
       case 'attendance':
         return <AttendanceTracker />
       case 'reports':

@@ -12,15 +12,18 @@ const pool = new Pool({
   connectionTimeoutMillis: 15000,
   idleTimeoutMillis: 30000,
   keepAlive: true
-})
+});
 
+// Set timezone on connection
+pool.on('connect', (client) => {
+  client.query('SET timezone = \'Asia/Kolkata\'');
+});
 
 const db = {
   async initializeSchema() {
     try {
       const client = await pool.connect();
       try {
-        // Check if users table exists
         const tableExists = await client.query(`
           SELECT EXISTS (
             SELECT FROM information_schema.tables 
@@ -29,7 +32,6 @@ const db = {
         `);
         
         if (!tableExists.rows[0].exists) {
-          // Only initialize schema if tables don't exist
           const schemaPath = path.join(__dirname, '..', 'database', 'schema.sql');
           const schema = fs.readFileSync(schemaPath, 'utf8');
           await client.query(schema);
@@ -37,9 +39,6 @@ const db = {
         } else {
           console.log('Database schema already exists');
         }
-      } catch (err) {
-        console.error('Error initializing schema:', err.message);
-        throw err;
       } finally {
         client.release();
       }
@@ -52,7 +51,7 @@ const db = {
   async testConnection() {
     try {
       const client = await pool.connect();
-      const result = await client.query('SELECT NOW()');
+      await client.query('SELECT NOW()');
       client.release();
       await this.initializeSchema();
       console.log('Database connection successful');
@@ -66,8 +65,7 @@ const db = {
   async query(text, params) {
     const client = await pool.connect();
     try {
-      const result = await client.query(text, params);
-      return result;
+      return await client.query(text, params);
     } catch (err) {
       console.error('Query error:', err.message);
       throw err;
@@ -76,7 +74,5 @@ const db = {
     }
   }
 };
-
-
 
 module.exports = db;

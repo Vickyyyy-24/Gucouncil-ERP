@@ -8,7 +8,7 @@ import { toast } from 'react-toastify'
 
 import Sidebar from '@/components/Sidebar'
 import Header from '@/components/Header'
-
+import UserAttendanceQR from '@/components/common/UserAttendanceQR'
 // Member Components
 import MemberProfile from '@/components/member/MemberProfile'
 import AttendanceTracker from '@/components/member/AttendanceTracker'
@@ -165,6 +165,7 @@ export default function MemberDashboard() {
   const tabs = [
     { id: 'profile', label: 'My Profile', icon: 'UserCircle' },
     { id: 'attendance', label: 'Attendance', icon: 'Clock' },
+    { id: 'qr', label: 'QR Attendance', icon: 'QrCode' },
     { id: 'reports', label: 'Work Reports', icon: 'FileText' },
     { id: 'leaves', label: 'Apply Leave', icon: 'Calendar' },
   ]
@@ -178,6 +179,8 @@ export default function MemberDashboard() {
         return <MemberProfile />
       case 'attendance':
         return <AttendanceTracker />
+      case 'qr':
+        return <UserAttendanceQR />
       case 'reports':
         return <WorkReports />
       case 'leaves':

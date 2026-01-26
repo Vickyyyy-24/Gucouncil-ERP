@@ -1,0 +1,2 @@
+E:\council-crm\electron-attendance\native\sdk-csharp\MantraMatcher\bin\Release\net8.0\win-x86\publish\MantraMatcher.pdb
+E:\council-crm\electron-attendance\native\sdk-csharp\MantraMatcher\bin\Release\net8.0\win-x86\publish\MantraMatcher.exe

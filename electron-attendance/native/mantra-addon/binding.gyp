@@ -4,22 +4,23 @@
       "target_name": "mantraaddon",
       "sources": ["src/addon.cpp"],
       "include_dirs": [
-        "<!(node -p \"require('node-addon-api').include\")",
-        "src"
+        "<!(node -p \"require('node-addon-api').include\")"
       ],
       "dependencies": [
         "<!(node -p \"require('node-addon-api').gyp\")"
       ],
-      "defines": ["NAPI_DISABLE_CPP_EXCEPTIONS=0"],
-      "cflags_cc": ["-std=c++17"],
+      "defines": ["NAPI_CPP_EXCEPTIONS"],
+      "cflags!": ["-fno-exceptions"],
+      "cflags_cc!": ["-fno-exceptions"],
       "msvs_settings": {
         "VCCLCompilerTool": {
-          "ExceptionHandling": 1,
-          "AdditionalOptions": ["/std:c++17"]
+          "ExceptionHandling": 1
         }
       },
       "libraries": [
-        "DelayImp.lib"
+        "Advapi32.lib",
+        "User32.lib",
+        "Kernel32.lib"
       ]
     }
   ]
